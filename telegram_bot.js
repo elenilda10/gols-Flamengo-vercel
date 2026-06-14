@@ -362,8 +362,8 @@ export async function processarMensagemTelegram(request, env) {
 
         return new Response("OK", { status: 200 });
 
-                // ===============================
-        // 🔐 COMANDO ADMIN: /iniciar_bolao (Completo com Pin/Unpin)
+                 // ===============================
+        // 🔐 COMANDO ADMIN: /iniciar_bolao (Correção de Strings)
         // ===============================
         else if (texto.startsWith("/iniciar_bolao")) {
             // 1. Validação estrita do seu ID de Administradora
@@ -398,7 +398,7 @@ export async function processarMensagemTelegram(request, env) {
                 return new Response("OK", { status: 200 });
             }
 
-            // Limpa estados antigos no KV (Segurança de Escopo)
+            // Limpa estados antigos no KV
             await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
             await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
             await env.GOLS_FLAMENGO_KV.delete("BOLAO_RESGATE_ID");
@@ -409,28 +409,28 @@ export async function processarMensagemTelegram(request, env) {
             let timeCasa = partesTimes[0] ? partesTimes[0].trim() : "Time 1";
             let timeFora = partesTimes[1] ? partesTimes[1].trim() : "Time 2";
 
-            // Monta a legenda do Post com blockquote expansível
+            // Monta a legenda do Post de forma segura
             let textoLegenda =
                 "🏟 <b>BOLÃO DO MENGÃO</b> 🔴⚫\n\n" +
                 "🔥 <b>PARTIDA:</b>\n" +
-                `<b>${infoJogo}</b>\n\n" +
+                "<b>" + infoJogo + "</b>\n\n" +
                 "💬 <b>COMO PARTICIPAR:</b>\n" +
                 "Clique em <b>“Escrever um comentário”</b> e envie seu palpite.\n\n" +
                 "<blockquote expandable>" +
                 "📌 <b>LEIA ANTES DE PALPITAR</b>\n\n" +
                 "O placar deve seguir exatamente a ordem da partida:\n\n" +
-                `<b>${timeCasa} X ${timeFora}</b>\n\n` +
+                "<b>" + timeCasa + " X " + timeFora + "</b>\n\n" +
                 "Exemplos:\n" +
-                `• <b>2x1</b> significa <b>${timeCasa} 2x1 ${timeFora}</b>\n` +
-                `• <b>1x2</b> significa <b>${timeCasa} 1x2 ${timeFora}</b>\n` +
+                "• <b>2x1</b> significa <b>" + timeCasa + " 2x1 " + timeFora + "</b>\n" +
+                "• <b>1x2</b> significa <b>" + timeCasa + " 1x2 " + timeFora + "</b>\n" +
                 "• <b>1x1</b> significa empate\n\n" +
                 "✅ <b>FORMAS VÁLIDAS DE PALPITE</b>\n\n" +
                 "• <b>2x1</b>\n" +
                 "• <b>2×1</b>\n" +
                 "• <b>2-1</b>\n" +
                 "• <b>2 a 1</b>\n" +
-                `• <b>${timeCasa} 2x1 ${timeFora}</b>\n` +
-                `• <b>${timeCasa} 1 ${timeFora} 0</b>\n\n" +
+                "• <b>" + timeCasa + " 2x1 " + timeFora + "</b>\n" +
+                "• <b>" + timeCasa + " 1 " + timeFora + " 0</b>\n\n" +
                 "⚠️ <b>REGRAS IMPORTANTES</b>\n\n" +
                 "• Envie apenas <b>1 palpite</b>\n" +
                 "• Você pode editar seu palpite apenas <b>1 vez</b>\n" +
@@ -438,7 +438,7 @@ export async function processarMensagemTelegram(request, env) {
                 "• Palpites enviados após o fechamento não contam\n" +
                 "• A ordem/mando da partida será considerado\n\n" +
                 "🏁 <b>Resumo:</b>\n" +
-                `O primeiro número é sempre do <b>${timeCasa}</b> e o segundo do <b>${timeFora}</b>.` +
+                "O primeiro número é sempre do <b>" + timeCasa + "</b> e o segundo do <b>" + timeFora + "</b>." +
                 "</blockquote>\n\n" +
                 "🏆 Vale <b>1 ponto</b> no ranking!";
 
@@ -447,7 +447,7 @@ export async function processarMensagemTelegram(request, env) {
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
             await env.GOLS_FLAMENGO_KV.put("bolao_fechado_manual", "false");
 
-            // 📤 Dispara a foto para o Canal e captura a resposta
+            // Dispara a foto para o Canal
             const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -464,33 +464,28 @@ export async function processarMensagemTelegram(request, env) {
             const canalMessageId = dadosPostagem.result.message_id;
             await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", String(canalMessageId));
 
-            // 📌 DESFIXA POSTS ANTIGOS NO CANAL
+            // Desfixa posts antigos no canal
             try {
                 await fetch(`https://api.telegram.org/bot${botToken}/unpinAllChatMessages`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ chat_id: "@Flamengo77" })
                 });
-            } catch (e) { console.error("Erro ao desfixar:", e.message); }
+            } catch (e) {}
 
-            // 📌 FIXA O NOVO BOLÃO NO CANAL
+            // Fixa o novo bolão no canal
             try {
                 await fetch(`https://api.telegram.org/bot${botToken}/pinChatMessage`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ chat_id: "@Flamengo77", message_id: canalMessageId, disable_notification: true })
                 });
-            } catch (e) { console.error("Erro ao fixar:", e.message); }
+            } catch (e) {}
 
-            // ✅ Confirmação final unificada enviada no seu chat privado
-            await enviarMensagem(
-                "✅ <b>Bolão iniciado com sucesso!</b>\n\n" +
-                `🆔 ID da postagem: <code>${canalMessageId}</code>\n` +
-                `🏟 Jogo: <b>${infoJogo}</b>\n\n` +
-                "📌 Postagem salva, mensagens antigas desfixadas e novo post destacado no canal!"
-            );
+            await enviarMensagem(`✅ <b>Bolão iniciado com sucesso!</b>\n\n🆔 ID: <code>${canalMessageId}</code>\n⚽ Jogo: <b>${infoJogo}</b>\n🟢 Sincronizado e postado no canal!`);
             return new Response("OK", { status: 200 });
         }
+
 
 
     } catch (erro) {
