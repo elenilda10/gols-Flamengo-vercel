@@ -6,7 +6,8 @@ export async function processarMensagemTelegram(request, env) {
 
     try {
         const update = await request.json();
-                // ==========================================================
+        
+        // ==========================================================
         // ⚡ MODO INLINE QUERY (Busca de Gols com Respeito ao Idioma Escolhido)
         // ==========================================================
         if (update.inline_query) {
@@ -18,13 +19,11 @@ export async function processarMensagemTelegram(request, env) {
             const offset = parseInt(inlineQuery.offset || "0") || 0;
             const uidTelegram = String(inlineQuery.from.id);
             
-            // 1. Tenta buscar se o usuário salvou uma preferência manual de idioma no KV
-            // (Ajuste o nome dessa chave se o seu robô usar outro padrão, ex: "lang_" + uid)
-            let idiomaSalvo = await env.GOLS_FLAMENGO_KV.get("user_lang_" + uidTelegram);
+            // 🎯 CONSERTADO: Busca exatamente a mesma chave que o modo botão altera!
+            let idiomaSalvo = await env.GOLS_FLAMENGO_KV.get(`lang_${uidTelegram}`);
             let lang = "pt"; // Padrão de segurança
 
             if (idiomaSalvo && ["pt", "en", "es"].includes(idiomaSalvo.toLowerCase().trim())) {
-                // Se ele escolheu manualmente no botão, segue estritamente a escolha dele!
                 lang = idiomaSalvo.toLowerCase().trim();
             } else {
                 // Se ele nunca mudou no botão, segue o idioma nativo do aplicativo do Telegram
@@ -37,7 +36,6 @@ export async function processarMensagemTelegram(request, env) {
             }
 
             const texts = {
-
                 pt: { 
                     search_title: "🔍 Buscar Gols", 
                     search_desc: "Digite jogador, time ou campeonato", 
@@ -68,7 +66,7 @@ export async function processarMensagemTelegram(request, env) {
                     list_desc: "Haz clic para ver todos los goles", 
                     list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos los goles:\n👉 Escribe: <code>Flamengo</code>", 
                     btn_search: "🔎 Buscar", 
-                    btn_all: "📋 Ver todos los goles", 
+                    btn_all: "📋 Ver todos os goles", 
                     btn_all_query: "Flamengo" 
                 }
             };
@@ -85,7 +83,13 @@ export async function processarMensagemTelegram(request, env) {
             const responderInline = async (resultados, proxOffset = "") => {
                 await fetch(`https://api.telegram.org/bot${botToken}/answerInlineQuery`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ inline_query_id: queryId, results: resultados, cache_time: 0, is_personal: true, next_offset: proxOffset })
+                    body: JSON.stringify({ 
+                        inline_query_id: queryId, 
+                        results: resultados, 
+                        cache_time: 0, // Garante atualização instantânea na mudança de idioma
+                        is_personal: true, 
+                        next_offset: proxOffset 
+                    })
                 });
             };
 
@@ -210,8 +214,8 @@ export async function processarMensagemTelegram(request, env) {
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
-            userFirstName = mensagem.from.first_name || "Torcedor";
-            userLastName = mensagem.from.last_name || "";
+            userFirstName = message.from.first_name || "Torcedor";
+            userLastName = message.from.last_name || "";
         } else {
             return new Response("OK", { status: 200 });
         }
@@ -480,7 +484,7 @@ export async function processarMensagemTelegram(request, env) {
             }
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
             await env.GOLS_FLAMENGO_KV.put("bolao_fechado_manual", "true");
-            await enviarMensagem("⛔ <b>Bolão fechado!</b>\n\nOs palpites não são mais aceitos no sistema.");
+            await enviarMensagem("⛔ <b>Bolão fechado!</b>\n\nOs palpites não são mais aceitos no systema.");
             return new Response("OK", { status: 200 });
         }
 
@@ -674,7 +678,6 @@ export async function processarMensagemTelegram(request, env) {
 
             let mensagemRanking = "🏆 <b>RANKING DO BOLÃO</b> 🏆\n\n";
             
-            // 🔥 CORREÇÃO VISUAL DO BOT: Lista todos os 34 sem travas
             for (let i = 0; i < rankingArray.length; i++) {
                 let pos = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "👤";
                 mensagemRanking += pos + " " + rankingArray[i].nome + " — <b>" + rankingArray[i].pontos + " pts</b>\n";
@@ -722,24 +725,21 @@ export async function processarMensagemTelegram(request, env) {
                     }
                 }
 
-
                 return new Response(JSON.stringify({ method: "sendMessage", chat_id: chatId, text: "✅ <b>MIGRAÇÃO CONCLUÍDA VIA API!</b>\n\nDados salvos com sucesso permanente." }), { headers: { "Content-Type": "application/json" } });
             } catch (e) {
                 return new Response(JSON.stringify({ method: "sendMessage", chat_id: chatId, text: "❌ <b>Erro:</b> " + e.message }), { headers: { "Content-Type": "application/json" } });
             }
         }
 
-                // ==========================================================
+        // ==========================================================
         // 🔐 COMANDO ADMIN: /addgoal (Web App integrado)
         // ==========================================================
         else if (texto.startsWith("/addgoal")) {
-            // Validação estrita do seu ID de Administrador
             if (String(userId) !== "7717528550") {
                 await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para gerenciar gols.");
                 return new Response("OK", { status: 200 });
             }
 
-            // Define os links das suas duas telas da Cloudflare
             const urlPainelForm = "https://lucky-bar-5077.futvert.workers.dev/api/painel-addgoal";
             const urlPainelLista = "https://lucky-bar-5077.futvert.workers.dev/api/lista-gols";
 
@@ -748,13 +748,10 @@ export async function processarMensagemTelegram(request, env) {
                 "Olá, Admin! Escolha uma das opções abaixo para gerenciar o acervo de gols de forma visual e direta através do WebApp do Telegram.";
 
             const tecladoWebApp = [
-                // Abre o formulário de Adicionar/Editar diretamente por cima do chat
                 [{ text: "➕ Adicionar / Editar Gol", web_app: { url: urlPainelForm } }],
-                // Abre a listagem inteligente com a barra de buscas por cima do chat
                 [{ text: "📋 Ver / Buscar na Lista Completa", web_app: { url: urlPainelLista } }]
             ];
 
-            // Dispara o menu administrativo com os botões de Web App
             let body = { 
                 chat_id: chatId, 
                 text: textoMenuAdmin, 
@@ -770,7 +767,6 @@ export async function processarMensagemTelegram(request, env) {
 
             return new Response("OK", { status: 200 });
         }
-
 
         return new Response("OK", { status: 200 });
 
