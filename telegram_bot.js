@@ -7,8 +7,8 @@ export async function processarMensagemTelegram(request, env) {
     try {
         const update = await request.json();
         
-        // ==========================================================
-        // ⚡ MODO INLINE QUERY (Busca de Gols)
+                // ==========================================================
+        // ⚡ MODO INLINE QUERY (Busca de Gols com Correção de Idioma)
         // ==========================================================
         if (update.inline_query) {
             console.log("INLINE RECEBIDO");
@@ -18,13 +18,50 @@ export async function processarMensagemTelegram(request, env) {
             const queryId = inlineQuery.id;
             const offset = parseInt(inlineQuery.offset || "0") || 0;
             
-            let userLangCode = (inlineQuery.from.language_code || "pt").substring(0, 2).toLowerCase();
-            let lang = ["pt", "en", "es"].includes(userLangCode) ? userLangCode : "pt";
+            // Força a detecção limpa do idioma. Se tiver "pt", assume português de qualquer lugar do mundo!
+            let userLangCode = String(inlineQuery.from.language_code || "pt").toLowerCase();
+            let lang = "pt"; // Padrão Brasil
+            
+            if (userLangCode.startsWith("en")) {
+                lang = "en";
+            } else if (userLangCode.startsWith("es")) {
+                lang = "es";
+            }
 
             const texts = {
-                pt: { search_title: "🔍 Buscar Gols", search_desc: "Digite jogador, time ou campeonato", search_msg: "🔍 <b>BUSCA DE GOLS ⚽</b>\n\nDigite palavras-chave como:\n• Pedro\n• Flamengo\n• Libertadores\n• Brasileirão\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Digite: <code>Flamengo</code>", list_title: "📋 Lista completa de gols", list_desc: "Clique para ver todos os gols do Flamengo", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os gols:\n👉 Digite: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os gols", btn_all_query: "Flamengo" },
-                en: { search_title: "🔍 Search Goals", search_desc: "Type player, team or competition", search_msg: "🔍 <b>GOALS SEARCH ⚽</b>\n\nType keywords like:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>To see all goals:</b>\n👉 Type: <code>Flamengo</code>", list_title: "📋 Full goals list", list_desc: "Click to see all Flamengo goals", list_msg: "📋 <b>FULL LIST ⚽</b>\n\nTo see all goals:\n👉 Type: <code>Flamengo</code>", btn_search: "🔎 Search", btn_all: "📋 View all goals", btn_all_query: "Flamengo" },
-                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos los goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos los goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
+                pt: { 
+                    search_title: "🔍 Buscar Gols", 
+                    search_desc: "Digite jogador, time ou campeonato", 
+                    search_msg: "🔍 <b>BUSCA DE GOLS ⚽</b>\n\nDigite palavras-chave como:\n• Pedro\n• Flamengo\n• Libertadores\n• Brasileirão\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Digite: <code>Flamengo</code>", 
+                    list_title: "📋 Lista completa de gols", 
+                    list_desc: "Clique para ver todos os gols do Flamengo", 
+                    list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os gols:\n👉 Digite: <code>Flamengo</code>", 
+                    btn_search: "🔎 Buscar", 
+                    btn_all: "📋 Ver todos os gols", 
+                    btn_all_query: "Flamengo" 
+                },
+                en: { 
+                    search_title: "🔍 Search Goals", 
+                    search_desc: "Type player, team or competition", 
+                    search_msg: "🔍 <b>GOALS SEARCH ⚽</b>\n\nType keywords like:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>To see all goals:</b>\n👉 Type: <code>Flamengo</code>", 
+                    list_title: "📋 Full goals list", 
+                    list_desc: "Click to see all Flamengo goals", 
+                    list_msg: "📋 <b>FULL LIST ⚽</b>\n\nTo see all goals:\n👉 Type: <code>Flamengo</code>", 
+                    btn_search: "🔎 Search", 
+                    btn_all: "📋 View all goals", 
+                    btn_all_query: "Flamengo" 
+                },
+                es: { 
+                    search_title: "🔍 Buscar Goles", 
+                    search_desc: "Escribe jugador, equipo o competición", 
+                    search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", 
+                    list_title: "📋 Lista completa de goles", 
+                    list_desc: "Haz clic para ver todos los goles", 
+                    list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos los goles:\n👉 Escribe: <code>Flamengo</code>", 
+                    btn_search: "🔎 Buscar", 
+                    btn_all: "📋 Ver todos los goles", 
+                    btn_all_query: "Flamengo" 
+                }
             };
             const t = (k) => texts[lang][k];
 
@@ -143,6 +180,7 @@ export async function processarMensagemTelegram(request, env) {
             await responderInline(resultados, proximoOffset);
             return new Response("OK", { status: 200 });
         }
+
 
         // ==========================================================
         // 🔘 MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
