@@ -12,7 +12,7 @@ export async function processarRotaApi(request, env) {
                     await env.GOLS_FLAMENGO_KV.put(`gol_${gol.id}`, JSON.stringify(gol));
                     novosIds.push(String(gol.id));
                 }
-            }
+            } 
 
             // Salva o índice com a lista de todos os IDs de gols
             await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(novosIds));
