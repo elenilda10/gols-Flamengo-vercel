@@ -253,3 +253,4 @@ export async function processarMensagemTelegram(request, env) {
         return new Response("OK", { status: 200 });
     }
 }
+ 
