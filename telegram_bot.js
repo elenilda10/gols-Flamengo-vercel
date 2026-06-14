@@ -9,9 +9,6 @@ export async function processarMensagemTelegram(request, env) {
 if (update.inline_query) {
     console.log("INLINE RECEBIDO");
 
-    const inlineQuery = update.inline_query;
-    
-
            const inlineQuery = update.inline_query;
             const busca = inlineQuery.query || "";
             const queryId = inlineQuery.id;
