@@ -471,6 +471,26 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+                // ===============================
+        // 🔐 COMANDO ADMIN: /fechar_bolao
+        // ===============================
+        else if (texto.startsWith("/fechar_bolao")) {
+            // 1. Validação estrita do seu ID de Administradora
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para fechar o bolão.");
+                return new Response("OK", { status: 200 });
+            }
+
+            // 2. Trava o estado do bolão diretamente no banco KV
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+            await env.GOLS_FLAMENGO_KV.put("bolao_fechado_manual", "true");
+
+            // 3. Envia a confirmação de fechamento
+            await enviarMensagem("⛔ <b>Bolão fechado!</b>\n\nOs palpites não são mais aceitos no sistema.");
+            return new Response("OK", { status: 200 });
+        }
+
+
         return new Response("OK", { status: 200 });
 
     } catch (erro) {
