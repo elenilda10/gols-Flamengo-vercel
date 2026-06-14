@@ -307,16 +307,16 @@ export async function processarRotaApi(request, env) {
                     const fase = document.getElementById('fase').value;
                     const file_id = document.getElementById('file_id').value;
 
-                    modalDataPreview.innerHTML = `
-                        <strong>🆔 ID:</strong> \${idText}<br>
-                        <strong>⚽ Jogo:</strong> \${jogo}<br>
-                        <strong>👤 Autor:</strong> \${autor}<br>
-                        <strong>🅰️ Assistência:</strong> \${assistencia}<br>
-                        <strong>🏆 Campeonato:</strong> \${campeonato}<br>
-                        <strong>📍 Fase/Rodada:</strong> \${fase}<br>
-                        <strong style="display:block; margin-top:5px; margin-bottom:2px;">📂 FileID:</strong>
-                        <span style="font-size:11px; color:#f87171; font-family:monospace; word-break:break-all;">\${file_id}</span>
-                    `;
+                    modalDataPreview.innerHTML = 
+                        '<strong>🆔 ID:</strong> ' + idText + '<br>' +
+                        '<strong>⚽ Jogo:</strong> ' + jogo + '<br>' +
+                        '<strong>👤 Autor:</strong> ' + autor + '<br>' +
+                        '<strong>🅰️ Assistência:</strong> ' + assistencia + '<br>' +
+                        '<strong>🏆 Campeonato:</strong> ' + campeonato + '<br>' +
+                        '<strong>📍 Fase/Rodada:</strong> ' + fase + '<br>' +
+                        '<strong style="display:block; margin-top:5px; margin-bottom:2px;">📂 FileID:</strong>' +
+                        '<span style="font-size:11px; color:#f87171; font-family:monospace; word-break:break-all;">' + file_id + '</span>';
+                    
                     confirmModal.classList.add('active');
                 }
 
@@ -414,7 +414,6 @@ export async function processarRotaApi(request, env) {
             gols.sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
 
             const totalEncontrados = gols.length;
-            // Se NÃO houver termo de busca, fatia para renderizar apenas os últimos 30 gols e economizar internet!
             if (!queryText) {
                 gols = gols.slice(0, 30);
             }
@@ -547,7 +546,7 @@ export async function processarRotaApi(request, env) {
                         idParaExcluir = null;
                     }
 
-                    async function ejecutarExclusaoDefinitiva() {
+                    async function executarExclusaoDefinitiva() {
                         if (!idParaExcluir) return;
                         const btn = document.getElementById('btnConfirmDelete');
                         btn.disabled = true;
@@ -676,7 +675,7 @@ export async function processarRotaApi(request, env) {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         chat_id: CANAL_BACKUP, video: goalData.file_id,
-                        caption: `📌 <b>${txtStatus} via Painel Web</b>\n\n🆔 <code>${goalData.id}</code>\n⚽ ${goalData.jogo}\n\n👟 Autor: ${goalData.autor}\n🅰 Assistência: ${goalData.assistencia}\n🏆 ${goalData.campeonato} - ${goalData.fase}`,
+                        caption: `📌 <b>\${txtStatus} via Painel Web</b>\n\n🆔 <code>\${goalData.id}</code>\n⚽ \${goalData.jogo}\n\n👟 Autor: \${goalData.autor}\n🅰 Assistência: \${goalData.assistencia}\n🏆 \${goalData.campeonato} - \${goalData.fase}`,
                         parse_mode: "HTML"
                     })
                 });
