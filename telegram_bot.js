@@ -1,5 +1,6 @@
-export async function processarMensagemTelegram(request, env) {
-    try {        // ==========================================================
+export default {
+    async fetch(request, env, ctx) {
+        // ==========================================================
         // 🌐 INTERCEPTOR DE APIS DA VERCEL (Colocar ANTES de ler o JSON)
         // ==========================================================
         const url = new URL(request.url);
@@ -131,42 +132,14 @@ export async function processarMensagemTelegram(request, env) {
             } catch (err) {
                 return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
             }
-        }
+        } // <--- Fechamento correto da API 2
 
-                // ==========================================================
-        // 🚚 API 3: /api/migrar_backup_dados (Receptor de Mudança Ultra Seguro)
-        // ==========================================================
-        else if (url.pathname === "/api/migrar_backup_dados") {
+        // 🔀 Se não for nenhuma API do site, cai no fluxo normal do Chat do Telegram:
+        if (url.pathname === "/webhook" || request.method === "POST") {
             try {
-                // Lê como texto puro primeiro para evitar que a Cloudflare trave
-                const rawText = await request.text();
-                let payload;
-                
-                try {
-                    payload = JSON.parse(rawText);
-                } catch (e) {
-                    return new Response(JSON.stringify({ ok: false, error: "JSON inválido enviado: " + e.message }), { status: 400, headers: headersCORS });
-                }
+                const update = await request.json();
+                // ... O resto do seu código antigo do chat continua daqui para baixo ...
 
-                if (payload.ranking_global) {
-                    await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(payload.ranking_global));
-                }
-                if (payload.ranking_names) {
-                    await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(payload.ranking_names));
-                }
-                if (payload.acertos_usuarios) {
-                    const uids = Object.keys(payload.acertos_usuarios);
-                    for (let i = 0; i < uids.length; i++) {
-                        const currentId = uids[i];
-                        await env.GOLS_FLAMENGO_KV.put("acertos_" + currentId, JSON.stringify(payload.acertos_usuarios[currentId]));
-                    }
-                }
-
-                return new Response(JSON.stringify({ ok: true, mensagem: "Dados gravados com sucesso total!" }), { status: 200, headers: headersCORS });
-            } catch (err) {
-                return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
-            }
-        }
 
 
         // ==========================================================
