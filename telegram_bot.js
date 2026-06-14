@@ -766,6 +766,68 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+                // ===============================
+        // 📊 COMANDO PÚBLICO: /ranking
+        // ===============================
+        else if (texto === "/ranking") {
+            // Se o comando veio do clique de um botão, avisa o Telegram para sumir com o reloginho de carregamento
+            if (isCallback) await responderCallback();
+
+            // Puxa as tabelas de ranking e nomes armazenadas no KV
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
+
+            // Transforma o objeto de dados em um Array manipulável
+            let rankingArray = Object.keys(ranking).map(function(id) {
+                return {
+                    id: id,
+                    nome: nomes[id] || "Torcedor",
+                    pontos: Number(ranking[id]) || 0
+                };
+            });
+
+            // Ordena o placar do maior número de pontos para o menor
+            rankingArray.sort(function(a, b) {
+                return b.pontos - a.pontos;
+            });
+
+            let mensagemRanking = "🏆 <b>RANKING DO BOLÃO</b> 🏆\n\n";
+            
+            // Exibe os Top 20 no chat do Telegram para a mensagem ficar elegante e legível
+            let limiteExibicao = Math.min(rankingArray.length, 20);
+
+            for (let i = 0; i < limiteExibicao; i++) {
+                let pos = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "👤";
+                mensagemRanking += pos + " " + rankingArray[i].nome + " — <b>" + rankingArray[i].pontos + " pts</b>\n";
+            }
+
+            if (rankingArray.length === 0) {
+                mensagemRanking += "Nenhum ponto registrado ainda. Participe do próximo bolão!\n";
+            }
+
+            mensagemRanking += "\n━━━━━━━━━━━━━━━\n⚡ Ranking em tempo real";
+
+            // URL do seu WebApp hospedado na Vercel
+            const webUrl = "https://flamengogolsbotbr.vercel.app/";
+            
+            const tecladoRanking = [
+                [{ text: "🌐 Abrir ranking completo", url: webUrl }],
+                [{ text: "🔄 Atualizar", callback_data: "/ranking" }]
+            ];
+
+            // Se for clique no botão, ele apenas atualiza o texto da mensagem antiga (sem poluir o chat)
+            if (isCallback) {
+                await editarMensagem(mensagemRanking, tecladoRanking);
+            } else {
+                await enviarMensagem(mensagemRanking, tecladoRanking);
+            }
+            return new Response("OK", { status: 200 });
+        }
+
+
 
 
 
