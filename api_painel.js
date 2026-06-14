@@ -123,7 +123,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ PAINEL VISUAL AVANÇADO (Adicionar + Editar Responsivo)
+    // 🖥️ PAINEL VISUAL: /api/painel-addgoal
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -136,7 +136,8 @@ export async function processarRotaApi(request, env) {
                 body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
                 .card { width: 100%; max-width: 550px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
                 h1 { margin: 0 0 5px 0; font-size: 24px; font-weight: 800; }
-                p { color: #a1a1aa; margin: 0 0 22px 0; font-size: 14px; }
+                p { color: #a1a1aa; margin: 0 0 15px 0; font-size: 14px; }
+                .nav-link { display: inline-block; color: #f87171; font-size: 14px; font-weight: 700; text-decoration: none; margin-bottom: 20px; border-bottom: 1px dashed #f87171; padding-bottom: 2px; }
                 .alert { padding: 12px; border-radius: 10px; margin-bottom: 18px; font-size: 14px; font-weight: 600; display: none; border: 1px solid rgba(255,255,255,0.1); word-break: break-all; }
                 form { display: flex; flex-direction: column; gap: 15px; }
                 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -161,6 +162,8 @@ export async function processarRotaApi(request, env) {
             <div class="card">
                 <h1 id="panelTitle">⚽ Adicionar Novo Gol</h1>
                 <p id="panelSubtitle">Preencha os campos abaixo para injetar no Banco KV.</p>
+                
+                <a href="/api/lista-gols" class="nav-link">📋 Ver Lista Completa de Gols</a>
                 
                 <div id="alertBox" class="alert"></div>
 
@@ -215,7 +218,15 @@ export async function processarRotaApi(request, env) {
                 const panelSubtitle = document.getElementById('panelSubtitle');
                 const btnSubmit = document.getElementById('btnSubmit');
 
-                // Detecta mudança manual do ID para ajustar o título dinamicamente
+                // Preenche o ID automaticamente caso venha pela URL (?edit_id=...)
+                const urlParams = new URLSearchParams(window.location.search);
+                const editId = urlParams.get('edit_id');
+                if (editId) {
+                    goalIdInput.value = editId;
+                    goalIdInput.dispatchEvent(new Event('input'));
+                    buscarGol();
+                }
+
                 goalIdInput.addEventListener('input', () => {
                     if(goalIdInput.value.trim() !== "") {
                         panelTitle.innerText = "📝 Editar Gol Existente";
@@ -294,8 +305,6 @@ export async function processarRotaApi(request, env) {
                         if (data.ok) {
                             alertBox.style.backgroundColor = '#065f46';
                             alertBox.innerText = '✅ Processado com sucesso! Registro salvo no KV com o ID: ' + data.id;
-                            
-                            // Reseta tudo após salvar
                             goalIdInput.value = '';
                             document.getElementById('goalForm').reset();
                             document.getElementById('admin_id').value = '7717528550';
@@ -320,40 +329,122 @@ export async function processarRotaApi(request, env) {
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
-    // 🔍 AUXILIAR DE BUSCA: /api/getgoal (Lê os dados de um ID antes de editar)
+    // 📋 NOVA TELA: /api/lista-gols (Exibe todos os gols salvos em formato de tabela)
+    else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
+        try {
+            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
+            let index = indexRaw ? JSON.parse(indexRaw) : [];
+
+            // Puxa os dados de todos os gols em blocos para ser ultra rápido
+            let loteDadosRaw = await Promise.all(index.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`)));
+            let gols = [];
+
+            for (let i = 0; i < loteDadosRaw.length; i++) {
+                if (loteDadosRaw[i]) {
+                    gols.push(JSON.parse(loteDadosRaw[i]));
+                }
+            }
+
+            // Ordena do mais recente para o mais antigo
+            gols.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+            let linhasTabela = gols.map(gol => `
+                <tr>
+                    <td class="id-cell"><code>${gol.id}</code></td>
+                    <td>
+                        <strong>${gol.jogo || 'Jogo'}</strong><br>
+                        <span style="color: #a1a1aa; font-size: 12px;">🏆 ${gol.campeonato || '-'} | ${gol.fase || '-'}</span>
+                    </td>
+                    <td>⚽ ${gol.autor || '-'}</td>
+                    <td>
+                        <a href="/api/painel-addgoal?edit_id=${gol.id}" class="btn-edit">📝 Editar</a>
+                    </td>
+                </tr>
+            `).join('');
+
+            const htmlLista = `
+            <!DOCTYPE html>
+            <html lang="pt-BR">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>📋 Lista de Gols Cadastrados</title>
+                <style>
+                    body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; padding: 20px; margin: 0; display: flex; justify-content: center; }
+                    .container { width: 100%; max-width: 800px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
+                    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 10px; }
+                    h1 { margin: 0; font-size: 24px; font-weight: 800; }
+                    .btn-back { background: #27272a; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); }
+                    .table-wrapper { width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); }
+                    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #09090b; }
+                    th, td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+                    th { background: #1f1f23; font-weight: 700; color: #d4d4d8; }
+                    tr:hover { background: rgba(255,255,255,0.02); }
+                    .id-cell { font-size: 12px; color: #f87171; }
+                    .btn-edit { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; }
+                    @media (max-width: 600px) {
+                        th, td { padding: 10px; font-size: 13px; }
+                        h1 { font-size: 20px; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>📋 Gols Cadastrados (${gols.length})</h1>
+                        <a href="/api/painel-addgoal" class="btn-back">🔙 Voltar</a>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Confronto / Campeonato</th>
+                                    <th>Autor</th>
+                                    <th>Ação</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${linhasTabela || '<tr><td colspan="4" style="text-align:center;">Nenhum gol cadastrado ainda.</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </body>
+            </html>
+            `;
+            return new Response(htmlLista, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+        } catch (e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    // 🔍 AUXILIAR DE BUSCA: /api/getgoal
     else if (url.pathname === "/api/getgoal" && request.method === "GET") {
         try {
             const id = url.searchParams.get("id");
             if(!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
-            
             const golRaw = await env.GOLS_FLAMENGO_KV.get(`gol_${id}`);
             if(!golRaw) return new Response(JSON.stringify({ ok: false, error: "not_found" }), { status: 404, headers: headersCORS });
-            
             return new Response(JSON.stringify({ ok: true, gol: JSON.parse(golRaw) }), { status: 200, headers: headersCORS });
         } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
 
-    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action (Trata tanto a criação quanto a edição)
+    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action
     else if (url.pathname === "/api/addgoal-action" && request.method === "POST") {
         try {
             const body = await request.json();
-            
-            if (String(body.admin_id) !== "7717528550") {
-                return new Response(JSON.stringify({ ok: false, error: "Acesso Negado: ID Inválido." }), { status: 401, headers: headersCORS });
-            }
+            if (String(body.admin_id) !== "7717528550") return new Response(JSON.stringify({ ok: false, error: "Acesso Negado." }), { status: 401, headers: headersCORS });
 
-            // Se recebeu um ID no body, é EDIÇÃO. Caso contrário, gera um ID novo (CRIAÇÃO)
             const isEditing = body.id && body.id.trim() !== "";
             const goalId = isEditing ? body.id.trim() : String(Date.now());
             
             let oldData = {};
             if (isEditing) {
                 const oldRaw = await env.GOLS_FLAMENGO_KV.get(`gol_${goalId}`);
-                if (!oldRaw) {
-                    return new Response(JSON.stringify({ ok: false, error: "Esse ID de gol não existe para ser editado." }), { status: 404, headers: headersCORS });
-                }
+                if (!oldRaw) return new Response(JSON.stringify({ ok: false, error: "ID não encontrado." }), { status: 404, headers: headersCORS });
                 oldData = JSON.parse(oldRaw);
             }
 
@@ -363,9 +454,7 @@ export async function processarRotaApi(request, env) {
                 return text.replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
             };
 
-            const search = safeNormalize(
-                `${body.jogo || ""} ${body.autor || ""} ${body.assistencia || ""} ${body.campeonato || ""} ${body.fase || ""}`
-            );
+            const search = safeNormalize(`${body.jogo || ""} ${body.autor || ""} ${body.assistencia || ""} ${body.campeonato || ""} ${body.fase || ""}`);
 
             const goalData = {
                 id: Number(goalId) || goalId,
@@ -382,10 +471,8 @@ export async function processarRotaApi(request, env) {
                 admin_id: Number(body.admin_id)
             };
 
-            // 1. Injeta ou atualiza o gol no banco KV
             await env.GOLS_FLAMENGO_KV.put(`gol_${goalId}`, JSON.stringify(goalData));
 
-            // 2. Se for criação, inclui o ID no índice geral de buscas
             if (!isEditing) {
                 let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
                 let index = indexRaw ? JSON.parse(indexRaw) : [];
@@ -395,7 +482,6 @@ export async function processarRotaApi(request, env) {
                 await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(index));
             }
 
-            // 3. Notificação do Telegram
             try {
                 const CANAL_BACKUP = "-1003703318973";
                 const txtStatus = isEditing ? "📝 Gol editado e modificado" : "📌 Novo gol adicionado";
@@ -415,7 +501,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🔄 ROTA 4: /api/importar-tudo (Migração antiga)
+    // 🔄 ROTA 5: /api/importar-tudo
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
             const acervo = await request.json();
