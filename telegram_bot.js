@@ -6,6 +6,9 @@ export async function processarMensagemTelegram(request, env) {
         // ===============================
         // ⚡ MODO INLINE QUERY (Busca de Gols)
         // ===============================
+
+        if (update.inline_query) {
+    console.log("INLINE RECEBIDO");
         if (update.inline_query) {
             const inlineQuery = update.inline_query;
             const busca = inlineQuery.query || "";
