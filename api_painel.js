@@ -1,5 +1,5 @@
 // ==========================================================
-// 🌐 PROCESSADOR DE APIS E PAINEL WEB DIRECT DEPLOY (CLOUDFLARE)
+// 🌐 PROCESSADOR DE APIS, GERENCIADOR WEB E MOTOR DE BOLÃO (CLOUDFLARE)
 // ==========================================================
 export async function processarRotaApi(request, env) {
     const url = new URL(request.url);
@@ -41,26 +41,6 @@ export async function processarRotaApi(request, env) {
                     } catch (e) { acertos = []; }
                 }
 
-                let cachedPhoto = cachedPhotoRaw || "";
-                if (!cachedPhoto && botToken) {
-                    try {
-                        const responseTelegram = await fetch("https://api.telegram.org/bot" + botToken + "/getUserProfilePhotos", {
-                            method: "POST", headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ user_id: Number(id), limit: 1 }),
-                            signal: AbortSignal.timeout(1500)
-                        });
-                        const photos = await responseTelegram.json();
-                        if (photos && photos.ok && photos.result && photos.result.total_count > 0 && photos.result.photos?.[0]) {
-                            let sizes = photos.result.photos[0];
-                            let largest = sizes[sizes.length - 1];
-                            if (largest && largest.file_id) {
-                                cachedPhoto = largest.file_id;
-                                await env.GOLS_FLAMENGO_KV.put("profile_photo_" + id, cachedPhoto);
-                            }
-                        }
-                    } catch (e) { cachedPhoto = ""; }
-                }
-
                 return {
                     id: String(id),
                     uid: String(id),
@@ -69,7 +49,7 @@ export async function processarRotaApi(request, env) {
                     pontos: Number(ranking[id]) || 0,
                     total: acertos.length,
                     acertos: acertos,
-                    photo_file_id: cachedPhoto
+                    photo_file_id: cachedPhotoRaw || ""
                 };
             }));
 
@@ -89,17 +69,9 @@ export async function processarRotaApi(request, env) {
 
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-            let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
 
             let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
             let nomes = namesRaw ? JSON.parse(namesRaw) : {};
-            let acertos = [];
-            if (acertosRaw) {
-                try {
-                    acertos = JSON.parse(acertosRaw);
-                    if (typeof acertos === "string") acertos = [acertos];
-                } catch(e) { acertos = []; }
-            }
 
             let nome = nomes[uid] || "Usuário";
             let pontos = Number(ranking[uid]) || 0;
@@ -109,15 +81,9 @@ export async function processarRotaApi(request, env) {
             });
             rankingArray.sort(function(a, b) { return b.pontos - a.pontos; });
 
-            let posicao = 0;
-            for (let i = 0; i < rankingArray.length; i++) {
-                if (String(rankingArray[i].id) === uid) {
-                    posicao = i + 1;
-                    break;
-                }
-            }
+            let posicao = rankingArray.findIndex(x => String(x.id) === uid) + 1;
 
-            return new Response(JSON.stringify({ ok: true, uid: uid, nome: nome, pontos: pontos, total: acertos.length, posicao: posicao, acertos: acertos }), { status: 200, headers: headersCORS });
+            return new Response(JSON.stringify({ ok: true, uid: uid, nome: nome, pontos: pontos, posicao: posicao }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
@@ -577,6 +543,121 @@ export async function processarRotaApi(request, env) {
             return new Response(htmlLista, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
         } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+        }
+    }
+
+    // ⚙️ MOTOR DE INTELIGÊNCIA DO BOLÃO: /api/processar-bolao (100% ADAPTADO NA CLOUDFLARE)
+    else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
+        try {
+            const data = await request.json();
+            const postId = String(data.post_id || "");
+            const userId = String(data.user_id || "");
+            const textoOriginal = String(data.texto_bruto || "").trim();
+
+            // 1. Verifica se o bolão está aberto direto no KV da Cloudflare
+            let bolaoStatus = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+            if (bolaoStatus === "false" || bolaoStatus === null) {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        chat_id: data.chat_id, 
+                        reply_to_message_id: Number(data.message_id), 
+                        parse_mode: "Markdown", 
+                        text: "⛔ *Palpites encerrados!*\n\nO bolão já foi fechado para esse jogo. Aguarde a próxima rodada! 🔴⚫" 
+                    })
+                });
+                return new Response(JSON.stringify({ ok: false, error: "fechado" }), { status: 200, headers: headersCORS });
+            }
+
+            // 2. Trava anti-duplicação: Confere se o torcedor já enviou palpite para esse PostID no KV
+            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_${postId}_${userId}`);
+            if (palpiteExistente) {
+                let jsp = JSON.parse(palpiteExistente);
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        chat_id: data.chat_id, 
+                        reply_to_message_id: Number(data.message_id), 
+                        parse_mode: "Markdown", 
+                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
+                    })
+                });
+                return new Response(JSON.stringify({ ok: false, error: "duplicado" }), { status: 200, headers: headersCORS });
+            }
+
+            // 3. Mecanismo Extrator e Higienizador de Placar (Transferido para a Cloudflare)
+            let limpo = textoOriginal.replace(/×/g, "x").replace(/X/g, "x").replace(/–|—/g, "-").replace(/\s+/g, " ").trim();
+            
+            // Regex Tipo 1: Direto (Ex: "2x1", "2-1", "2 a 1")
+            let direto = limpo.match(/(?:^|\D)(\d{1,2})\s*(?:x|-|a)\s*(\d{1,2})(?:\D|$)/i);
+            
+            let casa = "", fora = "", valido = false, tipoPlacar = "";
+            if (direto) { 
+                casa = direto[1]; fora = direto[2]; valido = true; tipoPlacar = "direto"; 
+            } else {
+                // Remove horários e tenta Regex Tipo 2: Com Nomes (Ex: "Flamengo 1 Bahia 0")
+                let semHorario = limpo.replace(/\b\d{1,2}\s*h\s*\d{0,2}\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ").replace(/\s+/g, " ").trim();
+                let comTimes = semHorario.match(/(?:^|[\s.,;:!?])([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})\s+([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})(?:$|[\s.,;:!?])/i);
+                if (comTimes) { 
+                    casa = comTimes[2]; fora = comTimes[4]; valido = true; tipoPlacar = "times"; 
+                } else {
+                    // Regex Tipo 3: Duas palavras numéricas isoladas no texto
+                    let numeros = semHorario.match(/\b\d{1,2}\b/g);
+                    if (numeros && numeros.length === 2) { casa = numeros[0]; fora = numeros[1]; valido = true; tipoPlacar = "dois_numeros"; }
+                }
+            }
+
+            // 4. Se o palpite for confuso, devolve o erro padrão
+            if (!valido) {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        chat_id: data.chat_id, 
+                        reply_to_message_id: Number(data.message_id), 
+                        parse_mode: "HTML", 
+                        text: "❌ <b>Formato de palpite inválido!</b>\n\n<blockquote>📌 Envie um placar inteligível. Exemplos:\n• 2x1\n• Flamengo 3x0 Coritiba</blockquote>" 
+                    })
+                });
+                return new Response(JSON.stringify({ ok: false, error: "invalido" }), { status: 200, headers: headersCORS });
+            }
+
+            // String limpa formatada
+            let palpiteFinal = casa + "x" + fora;
+
+            let palpiteObjeto = {
+                user_id: userId,
+                nome: data.first_name,
+                username: data.username,
+                palpite: palpiteFinal,
+                texto_original: textoOriginal,
+                message_id: Number(data.message_id),
+                chat_id: Number(data.chat_id),
+                tipo: tipoPlacar,
+                timestamp: Date.now()
+            };
+
+            // 5. Salva na tabela global da rodada e cria o espelho individual do usuário no KV
+            let chaveListaGlobal = "palpites_" + postId;
+            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
+            let listaGlobal = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
+            listaGlobal[userId] = palpiteObjeto;
+            
+            await env.GOLS_FLAMENGO_KV.put(chaveListaGlobal, JSON.stringify(listaGlobal));
+            await env.GOLS_FLAMENGO_KV.put(`palpite_user_${postId}_${userId}`, JSON.stringify(palpiteObjeto));
+
+            // 6. Confirma o recebimento colocando apenas a reação de 👍 na mensagem do comentário
+            await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    chat_id: data.chat_id, 
+                    message_id: Number(data.message_id), 
+                    reaction: [{ type: "emoji", emoji: "👍" }] 
+                })
+            });
+
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+        } catch (err) {
+            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
     }
 
