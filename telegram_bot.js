@@ -675,11 +675,55 @@ export async function processarMensagemTelegram(request, env) {
                     }
                 }
 
+
                 return new Response(JSON.stringify({ method: "sendMessage", chat_id: chatId, text: "✅ <b>MIGRAÇÃO CONCLUÍDA VIA API!</b>\n\nDados salvos com sucesso permanente." }), { headers: { "Content-Type": "application/json" } });
             } catch (e) {
                 return new Response(JSON.stringify({ method: "sendMessage", chat_id: chatId, text: "❌ <b>Erro:</b> " + e.message }), { headers: { "Content-Type": "application/json" } });
             }
         }
+
+                // ==========================================================
+        // 🔐 COMANDO ADMIN: /addgoal (Web App integrado)
+        // ==========================================================
+        else if (texto.startsWith("/addgoal")) {
+            // Validação estrita do seu ID de Administrador
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para gerenciar gols.");
+                return new Response("OK", { status: 200 });
+            }
+
+            // Define os links das suas duas telas da Cloudflare
+            const urlPainelForm = "https://lucky-bar-5077.futvert.workers.dev/api/painel-addgoal";
+            const urlPainelLista = "https://lucky-bar-5077.futvert.workers.dev/api/lista-gols";
+
+            const textoMenuAdmin = 
+                "⚙️ <b>PAINEL ADMINISTRATIVO DE GOLS</b>\n\n" +
+                "Olá, Admin! Escolha uma das opções abaixo para gerenciar o acervo de gols de forma visual e direta através do WebApp do Telegram.";
+
+            const tecladoWebApp = [
+                // Abre o formulário de Adicionar/Editar diretamente por cima do chat
+                [{ text: "➕ Adicionar / Editar Gol", web_app: { url: urlPainelForm } }],
+                // Abre a listagem inteligente com a barra de buscas por cima do chat
+                [{ text: "📋 Ver / Buscar na Lista Completa", web_app: { url: urlPainelLista } }]
+            ];
+
+            // Dispara o menu administrativo com os botões de Web App
+            let body = { 
+                chat_id: chatId, 
+                text: textoMenuAdmin, 
+                parse_mode: "HTML", 
+                reply_markup: { inline_keyboard: tecladoWebApp } 
+            };
+            
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { 
+                method: "POST", 
+                headers: { "Content-Type": "application/json" }, 
+                body: JSON.stringify(body) 
+            });
+
+            return new Response("OK", { status: 200 });
+        }
+
 
         return new Response("OK", { status: 200 });
 
