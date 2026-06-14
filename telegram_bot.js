@@ -1000,6 +1000,67 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+                // ==========================================================
+        // 🔐 GATILHO DE IMPORTAÇÃO: /puxar_backup (URL Real Injetada)
+        // ==========================================================
+        else if (texto === "/puxar_backup") {
+            // Validação de segurança para apenas VOCÊ (Eduardo) rodar
+            if (String(userId) !== "7717528550") {
+                return new Response(JSON.stringify({
+                    method: "sendMessage",
+                    chat_id: update.message.chat.id,
+                    text: "❌ <b>Erro:</b> Você não tem permissão para rodar este comando."
+                }), { headers: { "Content-Type": "application/json" } });
+            }
+
+            try {
+                // Link oficial e assinado do seu TeleBotHost
+                const urlTeleBotHost = "https://prod-api.telebothost.com/ownlang/webhook/22351677?command=get_full_backup&sig=f212be306d432205fa4869eb613600c6c222dd7f367443035c0753f8bafd0cf4";
+
+                // Faz a Cloudflare ir buscar o JSON lá no servidor antigo
+                const respostaServidor = await fetch(urlTeleBotHost);
+                
+                if (!respostaServidor.ok) {
+                    throw new Error("O TeleBotHost recusou a conexão. Status: " + respostaServidor.status);
+                }
+
+                const payload = await respostaServidor.json();
+
+                // 1. Salva a tabela global de pontos no KV
+                if (payload.ranking_global) {
+                    await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(payload.ranking_global));
+                }
+                // 2. Salva a tabela global de nomes no KV
+                if (payload.ranking_names) {
+                    await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(payload.ranking_names));
+                }
+                // 3. Salva os históricos individuais de acertos de cada ID
+                if (payload.acertos_usuarios) {
+                    const uids = Object.keys(payload.acertos_usuarios);
+                    for (let i = 0; i < uids.length; i++) {
+                        const currentId = uids[i];
+                        await env.GOLS_FLAMENGO_KV.put("acertos_" + currentId, JSON.stringify(payload.acertos_usuarios[currentId]));
+                    }
+                }
+
+                return new Response(JSON.stringify({
+                    method: "sendMessage",
+                    chat_id: update.message.chat.id,
+                    text: "✅ <b>MIGRAÇÃO CONCLUÍDA VIA API!</b>\n\nTodos os dados dos 34 jogadores foram importados automaticamente e salvos de forma permanente no banco KV da Cloudflare.",
+                    parse_mode: "HTML"
+                }), { headers: { "Content-Type": "application/json" } });
+
+            } catch (e) {
+                return new Response(JSON.stringify({
+                    method: "sendMessage",
+                    chat_id: update.message.chat.id,
+                    text: "❌ <b>Erro na migração automática:</b>\n<code>" + e.message + "</code>",
+                    parse_mode: "HTML"
+                }), { headers: { "Content-Type": "application/json" } });
+            }
+        }
+
+
 
 
 
