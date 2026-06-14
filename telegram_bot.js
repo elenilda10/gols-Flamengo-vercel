@@ -268,8 +268,8 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
-        // ===============================
-        // COMANDOS PRINCIPAIS
+                // ===============================
+        // ⚡ COMANDOS PRINCIPAIS
         // ===============================
         if (texto.startsWith("/start") || texto === "menu_principal") {
             if (isCallback && texto !== "menu_principal") await responderCallback();
@@ -278,57 +278,57 @@ export async function processarMensagemTelegram(request, env) {
             if (texto.startsWith("/start resgatar_") && !texto.startsWith("/start resgatar_br_")) {
                 let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
-                let confronto = await env.GOLS_FLAMENGO_KV.get(`confronto_${postagemId}`) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Partida não informada";
-                let resultadoOficial = await env.GOLS_FLAMENGO_KV.get(`resultado_oficial_${postagemId}`) || "Resultado ainda não informado";
-                let encerradoEm = await env.GOLS_FLAMENGO_KV.get(`bolao_encerrado_em_${postagemId}`) || 0;
+                let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postagemId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Partida não informada";
+                let resultadoOficial = await env.GOLS_FLAMENGO_KV.get("resultado_oficial_" + postagemId) || "Resultado ainda não informado";
+                let encerradoEm = await env.GOLS_FLAMENGO_KV.get("bolao_encerrado_em_" + postagemId) || 0;
                 
                 let umaHora = 60 * 60 * 1000;
                 let aindaEmRevisao = Date.now() - Number(encerradoEm) < umaHora;
 
-                let meuPalpiteRaw = await env.GOLS_FLAMENGO_KV.get(`palpite_user_${postagemId}_${userId}`);
+                let meuPalpiteRaw = await env.GOLS_FLAMENGO_KV.get("palpite_user_" + postagemId + "_" + userId);
                 let textoPalpite = "";
                 if (meuPalpiteRaw) {
                     let meuPalpite = JSON.parse(meuPalpiteRaw);
-                    if (meuPalpite.palpite) textoPalpite = `\n📌 Seu palpite: <b>${escHTML(meuPalpite.palpite)}</b>`;
+                    if (meuPalpite.palpite) textoPalpite = "\n📌 Seu palpite: <b>" + escHTML(meuPalpite.palpite) + "</b>";
                 }
 
-                let winnersRaw = await env.GOLS_FLAMENGO_KV.get(`vencedores_ids_${postagemId}`);
+                let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postagemId);
                 let vencedoresIds = winnersRaw ? JSON.parse(winnersRaw) : [];
                 let ganhou = vencedoresIds.includes(String(userId));
 
-                let chaveResgateConcluido = `resgate_concluido_${postagemId}_${userId}`;
+                let chaveResgateConcluido = "resgate_concluido_" + postagemId + "_" + userId;
                 let jaResgatou = await env.GOLS_FLAMENGO_KV.get(chaveResgateConcluido);
 
                 if (jaResgatou === "true") {
-                    await enviarMensagem(`✅ ${mention}, você já resgatou este ponto do Flamengo.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}`);
+                    await enviarMensagem("✅ " + mention + ", você já resgatou este ponto do Flamengo.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite);
                     return new Response("OK", { status: 200 });
                 }
 
                 if (ganhou) {
                     await env.GOLS_FLAMENGO_KV.put(chaveResgateConcluido, "true");
-                    let chaveAcertosTotal = `acertos_total_${userId}`;
+                    let chaveAcertosTotal = "acertos_total_" + userId;
                     let acertos = Number(await env.GOLS_FLAMENGO_KV.get(chaveAcertosTotal) || 0) + 1;
                     await env.GOLS_FLAMENGO_KV.put(chaveAcertosTotal, String(acertos));
-                    let jaVerificou = await env.GOLS_FLAMENGO_KV.get(`resgate_verificado_${postagemId}_${userId}`);
+                    let jaVerificou = await env.GOLS_FLAMENGO_KV.get("resgate_verificado_" + postagemId + "_" + userId);
                     let textoExtra = jaVerificou === "true" ? "\n🛠 Seu acerto foi reconhecido após a conferência manual." : "";
-                    await enviarMensagem(`🎯 ${mention}, seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n✅ Status: <b>Você ganhou!</b>${textoExtra}\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>${acertos}</b>`);
+                    await enviarMensagem("🎯 " + mention + ", seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n✅ Status: <b>Você ganhou!</b>" + textoExtra + "\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>" + acertos + "</b>");
                     return new Response("OK", { status: 200 });
                 }
 
-                await env.GOLS_FLAMENGO_KV.put(`resgate_verificado_${postagemId}_${userId}`, "true");
+                await env.GOLS_FLAMENGO_KV.put("resgate_verificado_" + postagemId + "_" + userId, "true");
                 let textoRevisao = aindaEmRevisao ? "\n\n🕒 O resultado ainda está no período de revisão de 1 hora." : "";
-                await enviarMensagem(`😔 ${mention}, você não faturou este bolão.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n❌ Status: <b>Você perdeu.</b>${textoRevisao}`);
+                await enviarMensagem("😔 " + mention + ", você não faturou este bolão.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n❌ Status: <b>Você perdeu.</b>" + textoRevisao);
                 return new Response("OK", { status: 200 });
             }
 
             // Textos principais do Menu
             const textosMenu = {
-                pt: `👋 Olá ${realName}, seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: ${totalUsers}`,
-                en: `👋 Hello ${realName}, welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: ${totalUsers}`,
-                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: ${totalUsers}`
+                pt: "👋 Olá " + realName + ", seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: " + totalUsers,
+                en: "👋 Hello " + realName + ", welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: " + totalUsers,
+                es: "👋 ¡Hola " + realName + ", bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: " + totalUsers
             };
 
-            // Dicionário dos Botões Traduzidos (Limpo sem parceiros e perfil)
+            // Dicionário dos Botões Traduzidos
             const botoesMenu = {
                 pt: { buscar: "Buscar Flamengo", livre: "Busca Livre", canal: "Canal Oficial", suporte: "Suporte 🛠", idioma: "Mudar Idioma" },
                 en: { buscar: "Search Flamengo", livre: "Free Search", canal: "Official Channel", suporte: "Support 🛠", idioma: "Change Language" },
@@ -351,28 +351,24 @@ export async function processarMensagemTelegram(request, env) {
 
         else if (texto === "/ajuda" || texto === "/help" || texto === "/ayuda") {
             const textosAjuda = {
-                pt: `🆘 <b>Central de Ajuda - Flamengo Gols Bot</b>\n\nBem-vindo ao bot oficial de gols do Flamengo! 🔴⚫\n\n🚀 <b>Como usar no modo inline</b>\nVocê pode buscar gols direto em qualquer chat, grupo ou conversa, sem precisar abrir o bot.\n\n<b>Passo a passo:</b>\n1️⃣ Vá para qualquer grupo\n2️⃣ Digite: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Escolha o resultado e envie! 🎥🔥`,
-                en: `🆘 <b>Help Center - Flamengo Goals Bot</b>\n\nWelcome to the official Flamengo goals bot! 🔴⚫\n\n🚀 <b>How to use inline mode</b>\nSearch goals directly in any chat without opening the bot.\n\n<b>Step by step:</b>\n1️⃣ Go to any group\n2️⃣ Type: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Choose the result and send! 🎥🔥`,
-                es: `🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de goles del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en cualquier chat sin abrir el bot.\n\n<b>Paso a paso:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥`
+                pt: "🆘 <b>Central de Ajuda - Flamengo Gols Bot</b>\n\nBem-vindo ao bot oficial de gols do Flamengo! 🔴⚫\n\n🚀 <b>Como usar no modo inline</b>\nVocê pode buscar gols direto em qualquer chat, grupo ou conversa, sem precisar abrir o bot.\n\n<b>Passo a passo:</b>\n1️⃣ Vá para qualquer grupo\n2️⃣ Digite: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Escolha o resultado e envie! 🎥🔥",
+                en: "🆘 <b>Help Center - Flamengo Goals Bot</b>\n\nWelcome to the official Flamengo goals bot! 🔴⚫\n\n🚀 <b>How to use inline mode</b>\nSearch goals directly in any chat without opening the bot.\n\n<b>Step by step:</b>\n1️⃣ Go to any group\n2️⃣ Type: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Choose the result and send! 🎥🔥",
+                es: "🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de gols del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en qualquer chat sin abrir el bot.\n\n<b>Paso a paso:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥"
             };
 
             const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]];
             await enviarMensagem(textosAjuda[lang], tecladoAjuda);
         }
 
-        return new Response("OK", { status: 200 });
-
-                 // ===============================
-        // 🔐 COMANDO ADMIN: /iniciar_bolao (Correção de Strings)
+        // ===============================
+        // 🔐 COMANDO ADMIN: /iniciar_bolao
         // ===============================
         else if (texto.startsWith("/iniciar_bolao")) {
-            // 1. Validação estrita do seu ID de Administradora
             if (String(userId) !== "7717528550") {
-                await enviarMensagem(`❌ Erro: O seu ID (${userId}) não tem permissão para iniciar o bolão.`);
+                await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para iniciar o bolão.");
                 return new Response("OK", { status: 200 });
             }
 
-            // Extrai os parâmetros do comando
             const params = texto.replace(/^\/iniciar_bolao\s*/, "").trim();
 
             if (!params) {
@@ -398,18 +394,15 @@ export async function processarMensagemTelegram(request, env) {
                 return new Response("OK", { status: 200 });
             }
 
-            // Limpa estados antigos no KV
             await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
             await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
             await env.GOLS_FLAMENGO_KV.delete("BOLAO_RESGATE_ID");
 
-            // Identifica os times para a legenda explicativa
             let confrontoLimpo = infoJogo.replace(/\d{1,2}H\d{0,2}/gi, "").replace(/\d{1,2}:\d{2}/g, "").trim();
             let partesTimes = confrontoLimpo.split(/\s+x\s+/i);
             let timeCasa = partesTimes[0] ? partesTimes[0].trim() : "Time 1";
             let timeFora = partesTimes[1] ? partesTimes[1].trim() : "Time 2";
 
-            // Monta a legenda do Post de forma segura
             let textoLegenda =
                 "🏟 <b>BOLÃO DO MENGÃO</b> 🔴⚫\n\n" +
                 "🔥 <b>PARTIDA:</b>\n" +
@@ -442,51 +435,43 @@ export async function processarMensagemTelegram(request, env) {
                 "</blockquote>\n\n" +
                 "🏆 Vale <b>1 ponto</b> no ranking!";
 
-            // Salva as configurações de estado no banco KV
             await env.GOLS_FLAMENGO_KV.put("confronto_atual", infoJogo);
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
             await env.GOLS_FLAMENGO_KV.put("bolao_fechado_manual", "false");
 
-            // Dispara a foto para o Canal
-            const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            const respostaCanal = await fetch("https://api.telegram.org/bot" + botToken + "/sendPhoto", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ chat_id: "@Flamengo77", photo: fotoId, caption: textoLegenda, parse_mode: "HTML" })
             });
 
             const dadosPostagem = await respostaCanal.json();
+            if (dadosPostagem.ok) {
+                const canalMessageId = dadosPostagem.result.message_id;
+                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", String(canalMessageId));
 
-            if (!dadosPostagem.ok) {
-                await enviarMensagem("❌ Erro ao enviar a postagem para o canal. Verifique se o bot é administrador lá.");
-                return new Response("OK", { status: 200 });
+                try {
+                    await fetch("https://api.telegram.org/bot" + botToken + "/unpinAllChatMessages", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ chat_id: "@Flamengo77" })
+                    });
+                } catch (e) {}
+
+                try {
+                    await fetch("https://api.telegram.org/bot" + botToken + "/pinChatMessage", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ chat_id: "@Flamengo77", message_id: canalMessageId, disable_notification: true })
+                    });
+                } catch (e) {}
             }
 
-            const canalMessageId = dadosPostagem.result.message_id;
-            await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", String(canalMessageId));
-
-            // Desfixa posts antigos no canal
-            try {
-                await fetch(`https://api.telegram.org/bot${botToken}/unpinAllChatMessages`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ chat_id: "@Flamengo77" })
-                });
-            } catch (e) {}
-
-            // Fixa o novo bolão no canal
-            try {
-                await fetch(`https://api.telegram.org/bot${botToken}/pinChatMessage`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ chat_id: "@Flamengo77", message_id: canalMessageId, disable_notification: true })
-                });
-            } catch (e) {}
-
-            await enviarMensagem(`✅ <b>Bolão iniciado com sucesso!</b>\n\n🆔 ID: <code>${canalMessageId}</code>\n⚽ Jogo: <b>${infoJogo}</b>\n🟢 Sincronizado e postado no canal!`);
+            await enviarMensagem("✅ <b>Bolão iniciado com sucesso!</b>\n\n🆔 ID: <code>" + dadosPostagem.result.message_id + "</code>\n⚽ Jogo: <b>" + infoJogo + "</b>\n🟢 Sincronizado e postado no canal!");
             return new Response("OK", { status: 200 });
         }
 
-
+        return new Response("OK", { status: 200 });
 
     } catch (erro) {
         console.error("ERRO GRAVE:", erro.message, erro.stack);
