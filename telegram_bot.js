@@ -136,9 +136,9 @@ export async function processarMensagemTelegram(request, env) {
             mensagem = update.message;
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
-            userId = message.from.id;
-            userFirstName = message.from.first_name || "Torcedor";
-            userLastName = message.from.last_name || "";
+            userId = mensagem.from.id;
+            userFirstName = mensagem.from.first_name || "Torcedor";
+            userLastName = mensagem.from.last_name || "";
         } else {
             return new Response("OK", { status: 200 });
         }
