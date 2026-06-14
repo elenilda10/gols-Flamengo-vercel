@@ -16,5 +16,5 @@ export default {
         }
 
         return new Response("Bot do Flamengo Ativo na Cloudflare via GitHub!", { status: 200 });
-    }
+    } 
 };
