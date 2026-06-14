@@ -133,19 +133,20 @@ export async function processarMensagemTelegram(request, env) {
             }
         }
 
+                // ==========================================================
+        // 🚚 API 3: /api/migrar_backup_dados (Receptor de Mudança Ultra Seguro)
         // ==========================================================
-        // 📥 FLUXO DO TELEGRAM (Só executa se não for uma rota da Vercel)
-        // ==========================================================
-        const update = await request.json();
-        const botTokenTelegram = env.TELEGRAM_TOKEN; // Mantém a tua antiga linha 4 aqui no final
-
-         // ==========================================================
-        // 🚚 APAGAR LOGO APÓS A MIGRAÇÃO (Temporário)
-        // ==========================================================
-        if (url.pathname === "/api/migrar_backup_dados") {
+        else if (url.pathname === "/api/migrar_backup_dados") {
             try {
-                const payload = update; 
-
+                // Lê como texto puro primeiro para evitar que a Cloudflare trave
+                const rawText = await request.text();
+                let payload;
+                
+                try {
+                    payload = JSON.parse(rawText);
+                } catch (e) {
+                    return new Response(JSON.stringify({ ok: false, error: "JSON inválido enviado: " + e.message }), { status: 400, headers: headersCORS });
+                }
 
                 if (payload.ranking_global) {
                     await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(payload.ranking_global));
@@ -161,14 +162,20 @@ export async function processarMensagemTelegram(request, env) {
                     }
                 }
 
-
-                return new Response(JSON.stringify({ ok: true, mensagem: "Gravado com sucesso!" }), { status: 200, headers: headersCORS });
+                return new Response(JSON.stringify({ ok: true, mensagem: "Dados gravados com sucesso total!" }), { status: 200, headers: headersCORS });
             } catch (err) {
                 return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
             }
         }
-        // ==========================================================
 
+
+        // ==========================================================
+        // 📥 FLUXO DO TELEGRAM (Só executa se não for uma rota da Vercel)
+        // ==========================================================
+        const update = await request.json();
+        const botTokenTelegram = env.TELEGRAM_TOKEN; // Mantém a tua antiga linha 4 aqui no final
+
+         
         // ===============================
         // ⚡ MODO INLINE QUERY (Busca de Gols)
         // ===============================
