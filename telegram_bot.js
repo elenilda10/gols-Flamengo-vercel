@@ -3,18 +3,6 @@ export async function processarMensagemTelegram(request, env) {
         const update = await request.json();
         const botToken = env.TELEGRAM_TOKEN;
 
-        export default {
-    async fetch(request, env) {
-        // --- ADICIONE ISSO AQUI NO TOPO ---
-        const url = new URL(request.url);
-        if (url.pathname === "/api/importar-tudo") {
-            return await processarRotaApi(request, env);
-        }
-        // ----------------------------------
-
-        // ... resto do seu código (webhook, processamento, etc)
-
-
         // ===============================
         // ⚡ MODO INLINE QUERY (Busca de Gols)
         // ===============================
