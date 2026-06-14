@@ -123,7 +123,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ PAINEL VISUAL: /api/painel-addgoal (Com Confirmação Expandida)
+    // 🖥️ PAINEL VISUAL: /api/painel-addgoal (Formulário com Modais de Confirmação)
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -148,7 +148,6 @@ export async function processarRotaApi(request, env) {
                 .btn-primary { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); width: 100%; }
                 .btn-secondary { background: #27272a; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 13px 18px; font-size: 14px; font-weight: 700; cursor: pointer; height: 47px; box-sizing: border-box; }
                 
-                /* Estilos dos Modais Popups */
                 .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box; z-index:1000; opacity:0; pointer-events:none; transition: opacity 0.2s ease; }
                 .modal-overlay.active { opacity:1; pointer-events:auto; }
                 .modal-content { background:#18181b; border: 1px solid rgba(255,255,255,0.12); border-radius:18px; width:100%; max-width:480px; padding:22px; box-sizing:border-box; box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
@@ -300,7 +299,6 @@ export async function processarRotaApi(request, env) {
 
                 function abrirModalConfirmacao(e) {
                     e.preventDefault();
-                    
                     const idText = goalIdInput.value.trim() || '<i>Gerado automaticamente (Novo Gol)</i>';
                     const jogo = document.getElementById('jogo').value;
                     const autor = document.getElementById('autor').value;
@@ -309,7 +307,7 @@ export async function processarRotaApi(request, env) {
                     const fase = document.getElementById('fase').value;
                     const file_id = document.getElementById('file_id').value;
 
-                    modalDataPreview.innerHTML = \`
+                    modalDataPreview.innerHTML = `
                         <strong>🆔 ID:</strong> \${idText}<br>
                         <strong>⚽ Jogo:</strong> \${jogo}<br>
                         <strong>👤 Autor:</strong> \${autor}<br>
@@ -318,8 +316,7 @@ export async function processarRotaApi(request, env) {
                         <strong>📍 Fase/Rodada:</strong> \${fase}<br>
                         <strong style="display:block; margin-top:5px; margin-bottom:2px;">📂 FileID:</strong>
                         <span style="font-size:11px; color:#f87171; font-family:monospace; word-break:break-all;">\${file_id}</span>
-                    \`;
-                    
+                    `;
                     confirmModal.classList.add('active');
                 }
 
@@ -327,7 +324,7 @@ export async function processarRotaApi(request, env) {
                     confirmModal.classList.remove('active');
                 }
 
-                async function ejecutarEnvioDefinitivo() {
+                async function executarEnvioDefinitivo() {
                     fecharModal();
                     const alertBox = document.getElementById('alertBox');
                     btnSubmit.disabled = true;
@@ -379,25 +376,51 @@ export async function processarRotaApi(request, env) {
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
-    // 📋 LISTA DE GOLS TURBO: /api/lista-gols (Com Função Exclusiva de Deletar + Confirmação)
+    // 📋 LISTA DE GOLS INTELIGENTE: /api/lista-gols (Busca Global + Paginação por Demanda no Servidor)
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
-            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
-            let index = indexRaw ? JSON.parse(indexRaw) : [];
+            let queryText = url.searchParams.get("q") || "";
+            queryText = queryText.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\s]/g, "");
+
+            let index = [];
+            let cursor = "";
+            while (true) {
+                let listaBruta = await env.GOLS_FLAMENGO_KV.list({ prefix: "gol_", limit: 1000, cursor: cursor });
+                index.push(...listaBruta.keys.map(k => k.name.replace("gol_", "")));
+                if (listaBruta.list_complete || !listaBruta.cursor) break;
+                cursor = listaBruta.cursor;
+            }
+            index = [...new Set(index)];
 
             let loteDadosRaw = await Promise.all(index.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`)));
             let gols = [];
 
             for (let i = 0; i < loteDadosRaw.length; i++) {
                 if (loteDadosRaw[i]) {
-                    gols.push(JSON.parse(loteDadosRaw[i]));
+                    try {
+                        let golObj = JSON.parse(loteDadosRaw[i]);
+                        if (queryText) {
+                            const termos = queryText.split(" ").filter(Boolean);
+                            const targetText = (golObj.search || "").toLowerCase();
+                            const match = termos.every(term => targetText.includes(term));
+                            if (match) gols.push(golObj);
+                        } else {
+                            gols.push(golObj);
+                        }
+                    } catch(e) {}
                 }
             }
 
-            gols.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+            gols.sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
+
+            const totalEncontrados = gols.length;
+            // Se NÃO houver termo de busca, fatia para renderizar apenas os últimos 30 gols e economizar internet!
+            if (!queryText) {
+                gols = gols.slice(0, 30);
+            }
 
             let linhasTabela = gols.map(gol => `
-                <tr id="row_${gol.id}" data-search="${gol.search || ''}">
+                <tr id="row_${gol.id}">
                     <td class="id-cell"><code>${gol.id}</code></td>
                     <td>
                         <strong class="goal-title">${gol.jogo || 'Jogo'}</strong><br>
@@ -407,7 +430,7 @@ export async function processarRotaApi(request, env) {
                     <td>
                         <div style="display:flex; gap:6px;">
                             <a href="/api/painel-addgoal?edit_id=${gol.id}" class="btn-edit">📝 Editar</a>
-                            <button class="btn-delete" onclick="solicitarDelecao('${gol.id}', '${gol.jogo.replace(/'/g, "\\'")}')">🗑️ Apagar</button>
+                            <button class="btn-delete" onclick="solicitarDelecao('${gol.id}', '${(gol.jogo || 'Gol').replace(/'/g, "\\'")}')">🗑️ Apagar</button>
                         </div>
                     </td>
                 </tr>
@@ -426,12 +449,10 @@ export async function processarRotaApi(request, env) {
                     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; }
                     h1 { margin: 0; font-size: 24px; font-weight: 800; }
                     .btn-back { background: #27272a; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); }
-                    
                     .search-container { position: relative; width: 100%; margin-bottom: 20px; }
                     .search-input { width: 100%; background: #09090b; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 15px 15px 15px 42px; color: #fff; font-size: 15px; outline: none; box-sizing: border-box; }
                     .search-input:focus { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 2px rgba(239,68,68,0.15); }
                     .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: #a1a1aa; font-size: 16px; pointer-events: none; }
-                    
                     .table-wrapper { width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); }
                     table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #09090b; }
                     th, td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
@@ -440,9 +461,9 @@ export async function processarRotaApi(request, env) {
                     .id-cell { font-size: 12px; color: #f87171; }
                     .btn-edit { background: #27272a; border: 1px solid rgba(255,255,255,0.1); color: #fff; text-decoration: none; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; }
                     .btn-delete { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border:0; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; cursor:pointer; }
-                    .no-results { display: none; padding: 30px; text-align: center; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; margin-top: 10px; }
+                    .no-results { display: ${totalEncontrados === 0 ? 'block' : 'none'}; padding: 30px; text-align: center; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; margin-top: 10px; }
+                    .info-txt { font-size: 12px; color: #a1a1aa; margin-top: 8px; display: ${url.searchParams.get("q") ? 'none' : 'block'}; }
                     
-                    /* Modal de Deleção */
                     .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box; z-index:1000; opacity:0; pointer-events:none; transition: opacity 0.2s ease; }
                     .modal-overlay.active { opacity:1; pointer-events:auto; }
                     .modal-content { background:#18181b; border: 1px solid rgba(239,68,68,0.25); border-radius:18px; width:100%; max-width:420px; padding:22px; box-sizing:border-box; box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
@@ -461,16 +482,16 @@ export async function processarRotaApi(request, env) {
             <body>
                 <div class="container">
                     <div class="header">
-                        <h1>📋 Gols Cadastrados (<span id="totalCounter">${gols.length}</span>)</h1>
+                        <h1>📋 Gols (${totalEncontrados})</h1>
                         <a href="/api/painel-addgoal" class="btn-back">🔙 Voltar</a>
                     </div>
                     
                     <div class="search-container">
                         <span class="search-icon">🔍</span>
-                        <input type="text" id="searchInput" class="search-input" placeholder="Buscar jogador, time ou campeonato..." oninput="filtrarGols()">
+                        <input type="text" id="searchInput" class="search-input" value="${url.searchParams.get("q") || ""}" placeholder="Buscar jogador, time ou campeonato... e pressione Enter" onkeydown="verificarTeclaEnter(event)">
                     </div>
 
-                    <div class="table-wrapper">
+                    <div class="table-wrapper" style="display: ${totalEncontrados === 0 ? 'none' : 'block'};">
                         <table id="golsTable">
                             <thead>
                                 <tr>
@@ -481,14 +502,16 @@ export async function processarRotaApi(request, env) {
                                 </tr>
                             </thead>
                             <tbody>
-                                ${linhasTabela || '<tr><td colspan="4" style="text-align:center;">Nenhum gol cadastrado ainda.</td></tr>'}
+                                ${linhasTabela || ''}
                             </tbody>
                         </table>
                     </div>
                     
                     <div id="noResultsBox" class="no-results">
-                        <strong>Nenhum gol encontrado com esses termos.</strong>
+                        <strong>Nenhum gol encontrado com esses termos na busca global.</strong>
                     </div>
+
+                    <div class="info-txt">💡 Exibindo apenas os 30 gols mais recentes para economizar dados. Use a barra de busca acima para varrer o histórico completo.</div>
                 </div>
 
                 <div id="deleteModal" class="modal-overlay">
@@ -506,21 +529,11 @@ export async function processarRotaApi(request, env) {
                 <script>
                     let idParaExcluir = null;
 
-                    function filtrarGols() {
-                        const input = document.getElementById('searchInput');
-                        let query = input.value.toLowerCase().trim().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").replace(/[^a-z0-9\\s]/g, "");
-                        const termos = query.split(" ").filter(Boolean);
-                        const rows = document.querySelectorAll('#golsTable tbody tr');
-                        let visiveis = 0;
-
-                        rows.forEach(row => {
-                            const targetText = row.getAttribute('data-search') || '';
-                            const match = termos.every(term => targetText.includes(term));
-                            if (match) { row.style.display = ''; visiveis++; } else { row.style.display = 'none'; }
-                        });
-                        document.getElementById('totalCounter').innerText = visiveis;
-                        document.querySelector('.table-wrapper').style.display = visiveis === 0 ? 'none' : 'block';
-                        document.getElementById('noResultsBox').style.display = visiveis === 0 ? 'block' : 'none';
+                    function verificarTeclaEnter(e) {
+                        if (e.key === 'Enter') {
+                            const valor = document.getElementById('searchInput').value.trim();
+                            window.location.href = '/api/lista-gols?q=' + encodeURIComponent(valor);
+                        }
                     }
 
                     function solicitarDelecao(id, jogo) {
@@ -534,7 +547,7 @@ export async function processarRotaApi(request, env) {
                         idParaExcluir = null;
                     }
 
-                    async function executarExclusaoDefinitiva() {
+                    async function ejecutarExclusaoDefinitiva() {
                         if (!idParaExcluir) return;
                         const btn = document.getElementById('btnConfirmDelete');
                         btn.disabled = true;
@@ -546,11 +559,7 @@ export async function processarRotaApi(request, env) {
                             
                             if (data.ok) {
                                 alert('🗑️ Gol removido com sucesso!');
-                                const row = document.getElementById('row_' + idParaExcluir);
-                                if (row) row.remove();
-                                // Atualiza o contador do cabeçalho
-                                const counter = document.getElementById('totalCounter');
-                                counter.innerText = Number(counter.innerText) - 1;
+                                document.getElementById('row_' + idParaExcluir).remove();
                             } else {
                                 alert('❌ Erro: ' + (data.error || 'Não foi possível apagar.'));
                             }
@@ -568,43 +577,36 @@ export async function processarRotaApi(request, env) {
             `;
             return new Response(htmlLista, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
         } catch (e) {
-            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     }
 
-    // 🗑️ NOVA ROTA DE AÇÃO: /api/deletegoal (Remove o gol do índice e deleta a chave individual no KV)
+    // 🗑️ ROTA DE AÇÃO: /api/deletegoal (Deleta o gol e limpa o índice geral)
     else if (url.pathname === "/api/deletegoal" && request.method === "DELETE") {
         try {
             const id = url.searchParams.get("id");
             if (!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
 
-            // 1. Pega e atualiza o índice de buscas
             let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
             let index = indexRaw ? JSON.parse(indexRaw) : [];
-
-            // Converte tudo para string e número para evitar qualquer falha de tipo primitivo
             index = index.map(x => String(x));
             
             if (!index.includes(String(id))) {
                 return new Response(JSON.stringify({ ok: false, error: "ID não encontrado no acervo." }), { status: 404, headers: headersCORS });
             }
 
-            // Filtra removendo o ID deletado
             let novoIndex = index.filter(x => String(x) !== String(id));
-            // Transforma de volta para número para manter o padrão antigo do seu robô
             novoIndex = novoIndex.map(x => Number(x) || x);
             await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(novoIndex));
 
-            // 2. Remove o registro definitivo do gol no banco KV
             await env.GOLS_FLAMENGO_KV.delete(`gol_${id}`);
-
-            return new Response(JSON.stringify({ ok: true, mensagem: "Gol excluído com sucesso do banco KV." }), { status: 200, headers: headersCORS });
+            return new Response(JSON.stringify({ ok: true, mensagem: "Excluído com sucesso." }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
     }
 
-    // 🔍 AUXILIAR DE BUSCA: /api/getgoal
+    // 🔍 AUXILIAR DE BUSCA: /api/getgoal (Carrega dados para edição rápida)
     else if (url.pathname === "/api/getgoal" && request.method === "GET") {
         try {
             const id = url.searchParams.get("id");
@@ -617,7 +619,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action
+    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action (Salva criação ou alteração de gols)
     else if (url.pathname === "/api/addgoal-action" && request.method === "POST") {
         try {
             const body = await request.json();
@@ -686,7 +688,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🔄 ROTA 6: /api/importar-tudo
+    // 🔄 ROTA MIGRATÓRIA: /api/importar-tudo
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
             const acervo = await request.json();
