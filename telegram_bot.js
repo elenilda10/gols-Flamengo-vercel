@@ -490,6 +490,146 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+                // ===============================
+        // 🔐 COMANDO ADMIN: /ganhou (Computar Pontos)
+        // ===============================
+        else if (texto.startsWith("/ganhou")) {
+            // 1. Validação estrita do seu ID de Administradora
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para usar este comando.");
+                return new Response("OK", { status: 200 });
+            }
+
+            // 2. Verifica se o comando foi enviado como resposta a um palpite
+            if (!update.message || !update.message.reply_to_message) {
+                await enviarMensagem("❌ Responda ao palpite vencedor.");
+                return new Response("OK", { status: 200 });
+            }
+
+            const replyTo = update.message.reply_to_message;
+            const vencedor = replyTo.from;
+            const msgId = replyTo.message_id;
+
+            // Remove o prefixo de supergrupo (-100) do chat ID para gerar links limpos
+            let rawChatId = String(update.message.chat.id);
+            let cleanChatId = rawChatId.replace("-100", "");
+
+            // Puxa o ID da postagem ativa ou do último bolão ativo
+            let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || await env.GOLS_FLAMENGO_KV.get("BOLAO_RESGATE_ID");
+
+            if (!postId) {
+                await enviarMensagem("❌ Nenhum bolão ativo ou encerrado encontrado.");
+                return new Response("OK", { status: 200 });
+            }
+
+            postId = String(postId);
+
+            // 3. Validação anti-duplicação de pontos para a mesma mensagem
+            const chaveGanhou = "ganhou_" + postId + "_" + msgId;
+            let jaMarcado = await env.GOLS_FLAMENGO_KV.get(chaveGanhou);
+
+            if (jaMarcado === "true") {
+                await enviarMensagem("⚠️ Esse palpite já foi marcado como vencedor neste bolão.");
+                return new Response("OK", { status: 200 });
+            }
+
+            await env.GOLS_FLAMENGO_KV.put(chaveGanhou, "true");
+
+            // Configura os links visuais no formato HTML
+            let nome = vencedor.first_name || "Usuário";
+            let perfilLink = "<a href=\"tg://user?id=" + vencedor.id + "\">" + nome + "</a>";
+            let linkComentario = "https://t.me/c/" + cleanChatId + "/" + msgId;
+            let novaEntrada = "🥇 " + perfilLink + " (<a href=\"" + linkComentario + "\">Ver Palpite</a>)";
+
+            // 4. Salva na lista temporária se o mercado ainda estiver aberto
+            let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+
+            if (bolaoAberto !== "false") {
+                let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+                let listaNova = listaAtual === "" ? novaEntrada : listaAtual + "\n" + novaEntrada;
+                await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
+            }
+
+            // 5. Atualiza o histórico textual do bolão específico
+            let historico = await env.GOLS_FLAMENGO_KV.get("historico_vencedores_" + postId) || "";
+            let historicoAtualizado = historico === "" ? novaEntrada : historico + "\n" + novaEntrada;
+            await env.GOLS_FLAMENGO_KV.put("historico_vencedores_" + postId, historicoAtualizado);
+
+            // 6. Atualiza o array de IDs de vencedores (JSON)
+            let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postId);
+            let listaIds = winnersRaw ? JSON.parse(winnersRaw) : [];
+
+            if (!listaIds.includes(String(vencedor.id))) {
+                listaIds.push(String(vencedor.id));
+            }
+            await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + postId, JSON.stringify(listaIds));
+
+            // 7. Soma um ponto na tabela do Ranking Global (JSON Object)
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            ranking[vencedor.id] = (ranking[vencedor.id] || 0) + 1;
+            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
+
+            // 8. Sincroniza/atualiza o nome do usuário no banco de dados (JSON Object)
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
+            nomes[vencedor.id] = nome;
+            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(nomes));
+
+            // 9. Se o bolão já foi finalizado, adiciona a partida ao histórico pessoal do torcedor
+            let resultado = await env.GOLS_FLAMENGO_KV.get("resultado_oficial_" + postId);
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Jogo";
+
+            if (resultado) {
+                let histUserRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + vencedor.id);
+                let historicoUser = histUserRaw ? JSON.parse(histUserRaw) : [];
+                let registro = confronto + " → " + resultado;
+
+                if (!historicoUser.includes(registro)) {
+                    historicoUser.push(registro);
+                }
+                await env.GOLS_FLAMENGO_KV.put("acertos_" + vencedor.id, JSON.stringify(historicoUser));
+            }
+
+            // 10. Se foi uma correção manual pós-encerramento, registra na auditoria
+            if (bolaoAberto === "false") {
+                let corrigidosRaw = await env.GOLS_FLAMENGO_KV.get("corrigidos_manual_" + postId);
+                let corrigidos = corrigidosRaw ? JSON.parse(corrigidosRaw) : [];
+
+                if (!corrigidos.includes(String(vencedor.id))) {
+                    corrigidos.push(String(vencedor.id));
+                }
+                await env.GOLS_FLAMENGO_KV.put("corrigidos_manual_" + postId, JSON.stringify(corrigidos));
+            }
+
+            // 📤 Envia a resposta de comemoração respondendo diretamente ao comentário do vencedor
+            await fetch("https://api.telegram.org/bot" + botToken + "/sendMessage", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chat_id: update.message.chat.id,
+                    text: "🎯 <b>ACERTOU O PLACAR!</b>\n\nParabéns " + perfilLink + " 🏆\n➕ 1 ponto adicionado!",
+                    parse_mode: "HTML",
+                    reply_to_message_id: msgId
+                })
+            });
+
+            // 🧹 Limpa o chat deletando a mensagem contendo o comando "/ganhou" que você acabou de enviar
+            try {
+                await fetch("https://api.telegram.org/bot" + botToken + "/deleteMessage", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: update.message.chat.id,
+                        message_id: update.message.message_id
+                    })
+                });
+            } catch (e) {}
+
+            return new Response("OK", { status: 200 });
+        }
+
+
 
         return new Response("OK", { status: 200 });
 
