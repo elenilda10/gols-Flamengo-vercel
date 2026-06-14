@@ -120,14 +120,15 @@ export async function processarMensagemTelegram(request, env) {
             userId = update.callback_query.from.id;
             userFirstName = update.callback_query.from.first_name || "Torcedor";
             userLastName = update.callback_query.from.last_name || "";
-        } else if (update.message) {
+                } else if (update.message) {
             mensagem = update.message;
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
-            userFirstName = message.from.first_name || "Torcedor";
-            userLastName = message.from.last_name || "";
-        } else {
+            userFirstName = mensagem.from.first_name || "Torcedor";
+            userLastName = mensagem.from.last_name || "";
+        }
+ else {
             return new Response("OK", { status: 200 });
         }
 
