@@ -98,10 +98,13 @@ export async function processarMensagemTelegram(request, env) {
                         }
                     }
                 }
-                i -= BATCH_SIZE;
+                 i -= BATCH_SIZE;
             }
 
-            let proximoOffset = (i >= 0) ? String(offset + itensPercorridos) : "";
+             let proximoOffset = "";
+
+      // Log de Debug para você acompanhar no painel da Cloudflare
+        console.log(`Debug Paginação: offset=${offset}, percorridos=${itensPercorridos}, prox=${proximoOffset}, encontrados=${resultados.length}`);
             await responderInline(resultados, proximoOffset);
             return new Response("OK", { status: 200 });
         }
