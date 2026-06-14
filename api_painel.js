@@ -8,7 +8,7 @@ export async function processarRotaApi(request, env) {
     const headersCORS = {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE",
         "Access-Control-Allow-Headers": "Content-Type"
     };
 
@@ -123,7 +123,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ PAINEL VISUAL: /api/painel-addgoal
+    // 🖥️ PAINEL VISUAL: /api/painel-addgoal (Com Confirmação Expandida)
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -147,7 +147,16 @@ export async function processarRotaApi(request, env) {
                 input { background: #09090b; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 14px 12px; color: #fff; font-size: 15px; outline: none; width: 100%; box-sizing: border-box; }
                 .btn-primary { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); width: 100%; }
                 .btn-secondary { background: #27272a; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 13px 18px; font-size: 14px; font-weight: 700; cursor: pointer; height: 47px; box-sizing: border-box; }
-                button:disabled { opacity: 0.6; cursor: not-allowed; }
+                
+                /* Estilos dos Modais Popups */
+                .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box; z-index:1000; opacity:0; pointer-events:none; transition: opacity 0.2s ease; }
+                .modal-overlay.active { opacity:1; pointer-events:auto; }
+                .modal-content { background:#18181b; border: 1px solid rgba(255,255,255,0.12); border-radius:18px; width:100%; max-width:480px; padding:22px; box-sizing:border-box; box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
+                .modal-title { margin:0 0 10px 0; font-size:20px; font-weight:800; display:flex; align-items:center; gap:8px; }
+                .modal-body { font-size:14px; color:#e4e4e7; line-height:1.5; background:#09090b; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.06); margin-bottom:18px; max-height:260px; overflow-y:auto; }
+                .modal-buttons { display:flex; justify-content:flex-end; gap:10px; }
+                .btn-modal-confirm { background:#ef4444; color:#fff; border:0; padding:11px 18px; font-weight:700; border-radius:8px; cursor:pointer; font-size:14px; }
+                .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:11px 18px; font-weight:700; border-radius:8px; cursor:pointer; font-size:14px; }
                 
                 @media (max-width: 600px) {
                     body { padding: 10px; }
@@ -175,7 +184,7 @@ export async function processarRotaApi(request, env) {
                     <button type="button" id="btnSearch" class="btn-secondary" onclick="buscarGol()">🔍 Buscar</button>
                 </div>
 
-                <form id="goalForm">
+                <form id="goalForm" onsubmit="abrirModalConfirmacao(event)">
                     <div class="field">
                         <label>Confronto / Jogo</label>
                         <input type="text" id="jogo" required placeholder="Ex: Flamengo 2x1 Vasco">
@@ -208,8 +217,20 @@ export async function processarRotaApi(request, env) {
                         <label>ID Administrador (Segurança)</label>
                         <input type="password" id="admin_id" value="7717528550" required>
                     </div>
-                    <button type="submit" id="btnSubmit" class="btn-primary">🚀 Salvar e Cadastrar Gol</button>
+                    <button type="submit" id="btnSubmit" class="btn-primary">🚀 Confirmar e Salvar Gol</button>
                 </form>
+            </div>
+
+            <div id="confirmModal" class="modal-overlay">
+                <div class="modal-content">
+                    <h3 class="modal-title">⚠️ Confirmar Registro do Gol?</h3>
+                    <p style="font-size:13px; color:#a1a1aa; margin:0 0 12px 0;">Confira os dados antes de gravar de forma definitiva:</p>
+                    <div id="modalDataPreview" class="modal-body"></div>
+                    <div class="modal-buttons">
+                        <button class="btn-modal-cancel" onclick="fecharModal()">🔙 Voltar</button>
+                        <button class="btn-modal-confirm" style="background:#065f46;" onclick="executarEnvioDefinitivo()">✅ Confirmar e Salvar</button>
+                    </div>
+                </div>
             </div>
 
             <script>
@@ -217,8 +238,9 @@ export async function processarRotaApi(request, env) {
                 const panelTitle = document.getElementById('panelTitle');
                 const panelSubtitle = document.getElementById('panelSubtitle');
                 const btnSubmit = document.getElementById('btnSubmit');
+                const confirmModal = document.getElementById('confirmModal');
+                const modalDataPreview = document.getElementById('modalDataPreview');
 
-                // Preenche o ID automaticamente caso venha pela URL (?edit_id=...)
                 const urlParams = new URLSearchParams(window.location.search);
                 const editId = urlParams.get('edit_id');
                 if (editId) {
@@ -235,7 +257,7 @@ export async function processarRotaApi(request, env) {
                     } else {
                         panelTitle.innerText = "⚽ Adicionar Novo Gol";
                         panelSubtitle.innerText = "Preencha os campos abaixo para injetar no Banco KV.";
-                        btnSubmit.innerText = "🚀 Salvar e Cadastrar Gol";
+                        btnSubmit.innerText = "🚀 Confirmar e Salvar Gol";
                     }
                 });
 
@@ -276,10 +298,38 @@ export async function processarRotaApi(request, env) {
                     }
                 }
 
-                document.getElementById('goalForm').addEventListener('submit', async (e) => {
+                function abrirModalConfirmacao(e) {
                     e.preventDefault();
-                    const alertBox = document.getElementById('alertBox');
                     
+                    const idText = goalIdInput.value.trim() || '<i>Gerado automaticamente (Novo Gol)</i>';
+                    const jogo = document.getElementById('jogo').value;
+                    const autor = document.getElementById('autor').value;
+                    const assistencia = document.getElementById('assistencia').value;
+                    const campeonato = document.getElementById('campeonato').value;
+                    const fase = document.getElementById('fase').value;
+                    const file_id = document.getElementById('file_id').value;
+
+                    modalDataPreview.innerHTML = \`
+                        <strong>🆔 ID:</strong> \${idText}<br>
+                        <strong>⚽ Jogo:</strong> \${jogo}<br>
+                        <strong>👤 Autor:</strong> \${autor}<br>
+                        <strong>🅰️ Assistência:</strong> \${assistencia}<br>
+                        <strong>🏆 Campeonato:</strong> \${campeonato}<br>
+                        <strong>📍 Fase/Rodada:</strong> \${fase}<br>
+                        <strong style="display:block; margin-top:5px; margin-bottom:2px;">📂 FileID:</strong>
+                        <span style="font-size:11px; color:#f87171; font-family:monospace; word-break:break-all;">\${file_id}</span>
+                    \`;
+                    
+                    confirmModal.classList.add('active');
+                }
+
+                function fecharModal() {
+                    confirmModal.classList.remove('active');
+                }
+
+                async function ejecutarEnvioDefinitivo() {
+                    fecharModal();
+                    const alertBox = document.getElementById('alertBox');
                     btnSubmit.disabled = true;
                     alertBox.style.display = 'none';
 
@@ -309,7 +359,7 @@ export async function processarRotaApi(request, env) {
                             document.getElementById('goalForm').reset();
                             document.getElementById('admin_id').value = '7717528550';
                             panelTitle.innerText = "⚽ Adicionar Novo Gol";
-                            btnSubmit.innerText = "🚀 Salvar e Cadastrar Gol";
+                            btnSubmit.innerText = "🚀 Confirmar e Salvar Gol";
                         } else {
                             alertBox.style.backgroundColor = '#991b1b';
                             alertBox.innerText = '❌ Erro no processamento: ' + (data.error || 'Falha ao salvar');
@@ -321,7 +371,7 @@ export async function processarRotaApi(request, env) {
                         alertBox.style.display = 'block';
                         btnSubmit.disabled = false;
                     }
-                });
+                }
             </script>
         </body>
         </html>
@@ -329,13 +379,12 @@ export async function processarRotaApi(request, env) {
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
-    // 📋 NOVA TELA: /api/lista-gols (Exibe todos os gols salvos em formato de tabela)
+    // 📋 LISTA DE GOLS TURBO: /api/lista-gols (Com Função Exclusiva de Deletar + Confirmação)
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
             let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
             let index = indexRaw ? JSON.parse(indexRaw) : [];
 
-            // Puxa os dados de todos os gols em blocos para ser ultra rápido
             let loteDadosRaw = await Promise.all(index.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`)));
             let gols = [];
 
@@ -345,19 +394,21 @@ export async function processarRotaApi(request, env) {
                 }
             }
 
-            // Ordena do mais recente para o mais antigo
             gols.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 
             let linhasTabela = gols.map(gol => `
-                <tr>
+                <tr id="row_${gol.id}" data-search="${gol.search || ''}">
                     <td class="id-cell"><code>${gol.id}</code></td>
                     <td>
-                        <strong>${gol.jogo || 'Jogo'}</strong><br>
-                        <span style="color: #a1a1aa; font-size: 12px;">🏆 ${gol.campeonato || '-'} | ${gol.fase || '-'}</span>
+                        <strong class="goal-title">${gol.jogo || 'Jogo'}</strong><br>
+                        <span class="goal-meta">🏆 ${gol.campeonato || '-'} | ${gol.fase || '-'}</span>
                     </td>
-                    <td>⚽ ${gol.autor || '-'}</td>
+                    <td class="goal-author">⚽ ${gol.autor || '-'}</td>
                     <td>
-                        <a href="/api/painel-addgoal?edit_id=${gol.id}" class="btn-edit">📝 Editar</a>
+                        <div style="display:flex; gap:6px;">
+                            <a href="/api/painel-addgoal?edit_id=${gol.id}" class="btn-edit">📝 Editar</a>
+                            <button class="btn-delete" onclick="solicitarDelecao('${gol.id}', '${gol.jogo.replace(/'/g, "\\'")}')">🗑️ Apagar</button>
+                        </div>
                     </td>
                 </tr>
             `).join('');
@@ -371,37 +422,62 @@ export async function processarRotaApi(request, env) {
                 <title>📋 Lista de Gols Cadastrados</title>
                 <style>
                     body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; padding: 20px; margin: 0; display: flex; justify-content: center; }
-                    .container { width: 100%; max-width: 800px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
-                    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 10px; }
+                    .container { width: 100%; max-width: 850px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
+                    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; }
                     h1 { margin: 0; font-size: 24px; font-weight: 800; }
                     .btn-back { background: #27272a; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); }
+                    
+                    .search-container { position: relative; width: 100%; margin-bottom: 20px; }
+                    .search-input { width: 100%; background: #09090b; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 15px 15px 15px 42px; color: #fff; font-size: 15px; outline: none; box-sizing: border-box; }
+                    .search-input:focus { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 2px rgba(239,68,68,0.15); }
+                    .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: #a1a1aa; font-size: 16px; pointer-events: none; }
+                    
                     .table-wrapper { width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); }
                     table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #09090b; }
                     th, td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
                     th { background: #1f1f23; font-weight: 700; color: #d4d4d8; }
                     tr:hover { background: rgba(255,255,255,0.02); }
                     .id-cell { font-size: 12px; color: #f87171; }
-                    .btn-edit { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; }
+                    .btn-edit { background: #27272a; border: 1px solid rgba(255,255,255,0.1); color: #fff; text-decoration: none; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; }
+                    .btn-delete { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border:0; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; cursor:pointer; }
+                    .no-results { display: none; padding: 30px; text-align: center; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; margin-top: 10px; }
+                    
+                    /* Modal de Deleção */
+                    .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box; z-index:1000; opacity:0; pointer-events:none; transition: opacity 0.2s ease; }
+                    .modal-overlay.active { opacity:1; pointer-events:auto; }
+                    .modal-content { background:#18181b; border: 1px solid rgba(239,68,68,0.25); border-radius:18px; width:100%; max-width:420px; padding:22px; box-sizing:border-box; box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
+                    .modal-title { margin:0 0 10px 0; font-size:18px; font-weight:800; color:#ef4444; }
+                    .modal-buttons { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+                    .btn-modal-delete { background:#ef4444; color:#fff; border:0; padding:10px 16px; font-weight:700; border-radius:8px; cursor:pointer; font-size:13px; }
+                    .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:10px 16px; font-weight:700; border-radius:8px; cursor:pointer; font-size:13px; }
+
                     @media (max-width: 600px) {
                         th, td { padding: 10px; font-size: 13px; }
                         h1 { font-size: 20px; }
+                        .search-input { padding: 12px 12px 12px 36px; font-size: 14px; }
                     }
                 </style>
             </head>
             <body>
                 <div class="container">
                     <div class="header">
-                        <h1>📋 Gols Cadastrados (${gols.length})</h1>
+                        <h1>📋 Gols Cadastrados (<span id="totalCounter">${gols.length}</span>)</h1>
                         <a href="/api/painel-addgoal" class="btn-back">🔙 Voltar</a>
                     </div>
+                    
+                    <div class="search-container">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="searchInput" class="search-input" placeholder="Buscar jogador, time ou campeonato..." oninput="filtrarGols()">
+                    </div>
+
                     <div class="table-wrapper">
-                        <table>
+                        <table id="golsTable">
                             <thead>
                                 <tr>
                                     <th>ID</th>
                                     <th>Confronto / Campeonato</th>
                                     <th>Autor</th>
-                                    <th>Ação</th>
+                                    <th>Ações</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -409,13 +485,122 @@ export async function processarRotaApi(request, env) {
                             </tbody>
                         </table>
                     </div>
+                    
+                    <div id="noResultsBox" class="no-results">
+                        <strong>Nenhum gol encontrado com esses termos.</strong>
+                    </div>
                 </div>
+
+                <div id="deleteModal" class="modal-overlay">
+                    <div class="modal-content">
+                        <h3 class="modal-title">⚠️ Excluir Gol Permanentemente?</h3>
+                        <p id="deleteModalText" style="font-size:14px; color:#e4e4e7; margin:0; line-height:1.5;"></p>
+                        <p style="font-size:12px; color:#f87171; font-weight:700; margin:10px 0 0 0;">🚨 Essa ação é irreversível e removerá o gol do robô!</p>
+                        <div class="modal-buttons">
+                            <button class="btn-modal-cancel" onclick="fecharModalDelecao()">Cancelar</button>
+                            <button class="btn-modal-delete" id="btnConfirmDelete" onclick="executarExclusaoDefinitiva()">🗑️ Apagar do KV</button>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                    let idParaExcluir = null;
+
+                    function filtrarGols() {
+                        const input = document.getElementById('searchInput');
+                        let query = input.value.toLowerCase().trim().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").replace(/[^a-z0-9\\s]/g, "");
+                        const termos = query.split(" ").filter(Boolean);
+                        const rows = document.querySelectorAll('#golsTable tbody tr');
+                        let visiveis = 0;
+
+                        rows.forEach(row => {
+                            const targetText = row.getAttribute('data-search') || '';
+                            const match = termos.every(term => targetText.includes(term));
+                            if (match) { row.style.display = ''; visiveis++; } else { row.style.display = 'none'; }
+                        });
+                        document.getElementById('totalCounter').innerText = visiveis;
+                        document.querySelector('.table-wrapper').style.display = visiveis === 0 ? 'none' : 'block';
+                        document.getElementById('noResultsBox').style.display = visiveis === 0 ? 'block' : 'none';
+                    }
+
+                    function solicitarDelecao(id, jogo) {
+                        idParaExcluir = id;
+                        document.getElementById('deleteModalText').innerHTML = 'Tem certeza que deseja apagar o gol do jogo <strong>' + jogo + '</strong> (ID: <code>' + id + '</code>)?';
+                        document.getElementById('deleteModal').classList.add('active');
+                    }
+
+                    function fecharModalDelecao() {
+                        document.getElementById('deleteModal').classList.remove('active');
+                        idParaExcluir = null;
+                    }
+
+                    async function executarExclusaoDefinitiva() {
+                        if (!idParaExcluir) return;
+                        const btn = document.getElementById('btnConfirmDelete');
+                        btn.disabled = true;
+                        btn.innerText = 'Apagando...';
+
+                        try {
+                            const res = await fetch('/api/deletegoal?id=' + idParaExcluir, { method: 'DELETE' });
+                            const data = await res.json();
+                            
+                            if (data.ok) {
+                                alert('🗑️ Gol removido com sucesso!');
+                                const row = document.getElementById('row_' + idParaExcluir);
+                                if (row) row.remove();
+                                // Atualiza o contador do cabeçalho
+                                const counter = document.getElementById('totalCounter');
+                                counter.innerText = Number(counter.innerText) - 1;
+                            } else {
+                                alert('❌ Erro: ' + (data.error || 'Não foi possível apagar.'));
+                            }
+                        } catch (e) {
+                            alert('❌ Erro crítico ao conectar com o servidor.');
+                        } finally {
+                            fecharModalDelecao();
+                            btn.disabled = false;
+                            btn.innerText = '🗑️ Apagar do KV';
+                        }
+                    }
+                </script>
             </body>
             </html>
             `;
             return new Response(htmlLista, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
         } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    // 🗑️ NOVA ROTA DE AÇÃO: /api/deletegoal (Remove o gol do índice e deleta a chave individual no KV)
+    else if (url.pathname === "/api/deletegoal" && request.method === "DELETE") {
+        try {
+            const id = url.searchParams.get("id");
+            if (!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
+
+            // 1. Pega e atualiza o índice de buscas
+            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
+            let index = indexRaw ? JSON.parse(indexRaw) : [];
+
+            // Converte tudo para string e número para evitar qualquer falha de tipo primitivo
+            index = index.map(x => String(x));
+            
+            if (!index.includes(String(id))) {
+                return new Response(JSON.stringify({ ok: false, error: "ID não encontrado no acervo." }), { status: 404, headers: headersCORS });
+            }
+
+            // Filtra removendo o ID deletado
+            let novoIndex = index.filter(x => String(x) !== String(id));
+            // Transforma de volta para número para manter o padrão antigo do seu robô
+            novoIndex = novoIndex.map(x => Number(x) || x);
+            await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(novoIndex));
+
+            // 2. Remove o registro definitivo do gol no banco KV
+            await env.GOLS_FLAMENGO_KV.delete(`gol_${id}`);
+
+            return new Response(JSON.stringify({ ok: true, mensagem: "Gol excluído com sucesso do banco KV." }), { status: 200, headers: headersCORS });
+        } catch (err) {
+            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
     }
 
@@ -501,7 +686,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🔄 ROTA 5: /api/importar-tudo
+    // 🔄 ROTA 6: /api/importar-tudo
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
             const acervo = await request.json();
