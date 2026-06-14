@@ -18,7 +18,7 @@ export async function processarRotaApi(request, env) {
         return new Response(null, { status: 204, headers: headersCORS });
     }
 
-    // 📊 API 1: /api/ranking_api (Tabela Completa com todos os 34 jogadores para a Vercel)
+        // 📊 API 1: /api/ranking_api (VERSÃO TURBO EM PARALELO)
     if (url.pathname === "/api/ranking_api") {
         try {
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
@@ -26,13 +26,16 @@ export async function processarRotaApi(request, env) {
 
             let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
             let nomes = namesRaw ? JSON.parse(namesRaw) : {};
-
-            let rankingArray = [];
             const ids = Object.keys(ranking);
 
-            for (let i = 0; i < ids.length; i++) {
-                const id = ids[i];
-                let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + id);
+            // Mapeia e dispara a busca de dados de TODO MUNDO ao mesmo tempo!
+            let rankingArray = await Promise.all(ids.map(async (id) => {
+                // Busca acertos e fotos em paralelo para este ID específico
+                const [acertosRaw, cachedPhotoRaw] = await Promise.all([
+                    env.GOLS_FLAMENGO_KV.get("acertos_" + id),
+                    env.GOLS_FLAMENGO_KV.get("profile_photo_" + id)
+                ]);
+
                 let acertos = [];
                 if (acertosRaw) {
                     try {
@@ -42,16 +45,19 @@ export async function processarRotaApi(request, env) {
                     } catch (e) { acertos = []; }
                 }
 
-                let cachedPhoto = await env.GOLS_FLAMENGO_KV.get("profile_photo_" + id);
-                if (!cachedPhoto) {
+                let cachedPhoto = cachedPhotoRaw || "";
+                
+                // Se não tem em cache e o token existe, busca no Telegram (sem travar os outros)
+                if (!cachedPhoto && botToken) {
                     try {
                         const responseTelegram = await fetch("https://api.telegram.org/bot" + botToken + "/getUserProfilePhotos", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ user_id: Number(id), limit: 1 })
+                            body: JSON.stringify({ user_id: Number(id), limit: 1 }),
+                            signal: AbortSignal.timeout(1500) // ⏱️ Trava de segurança: se o Telegram enrolar mais de 1.5s, pula!
                         });
                         const photos = await responseTelegram.json();
-                        if (photos && photos.ok && photos.result && photos.result.total_count > 0 && photos.result.photos && photos.result.photos[0]) {
+                        if (photos && photos.ok && photos.result && photos.result.total_count > 0 && photos.result.photos?.[0]) {
                             let sizes = photos.result.photos[0];
                             let largest = sizes[sizes.length - 1];
                             if (largest && largest.file_id) {
@@ -62,7 +68,7 @@ export async function processarRotaApi(request, env) {
                     } catch (e) { cachedPhoto = ""; }
                 }
 
-                rankingArray.push({
+                return {
                     id: String(id),
                     uid: String(id),
                     nome: nomes[id] || "Torcedor",
@@ -70,9 +76,9 @@ export async function processarRotaApi(request, env) {
                     pontos: Number(ranking[id]) || 0,
                     total: acertos.length,
                     acertos: acertos,
-                    photo_file_id: cachedPhoto || ""
-                });
-            }
+                    photo_file_id: cachedPhoto
+                };
+            }));
 
             rankingArray.sort(function (a, b) { return b.pontos - a.pontos; });
             return new Response(JSON.stringify({ ok: true, ranking: rankingArray }), { status: 200, headers: headersCORS });
@@ -80,6 +86,7 @@ export async function processarRotaApi(request, env) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
     }
+
 
     // 👤 API 2: /api/ranking_user_public_api (Perfil Individual de cada torcedor para a Vercel)
     else if (url.pathname === "/api/ranking_user_public_api") {
