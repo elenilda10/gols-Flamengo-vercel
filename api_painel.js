@@ -123,7 +123,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-        // 🖥️ PAINEL VISUAL AJUSTADO RESPONSIVO
+         // 🖥️ PAINEL VISUAL AJUSTADO RESPONSIVO
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -257,9 +257,7 @@ export async function processarRotaApi(request, env) {
         `;
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
-`;
-        return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
-    }
+
 
     // ⚡ AÇÃO DA API: /api/addgoal-action (Processa o clique de salvar do formulário)
     else if (url.pathname === "/api/addgoal-action" && request.method === "POST") {
