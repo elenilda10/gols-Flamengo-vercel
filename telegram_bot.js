@@ -124,9 +124,9 @@ export async function processarMensagemTelegram(request, env) {
             mensagem = update.message;
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
-            userId = mensagem.from.id;
-            userFirstName = mensagem.from.first_name || "Torcedor";
-            userLastName = mensagem.from.last_name || "";
+            userId = message.from.id;
+            userFirstName = message.from.first_name || "Torcedor";
+            userLastName = message.from.last_name || "";
         } else {
             return new Response("OK", { status: 200 });
         }
@@ -153,7 +153,7 @@ export async function processarMensagemTelegram(request, env) {
             await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
 
-        // 🧠 SISTEMA DE IDIOMA INTELIGENTE (Busca no Banco -> Tenta do Celular -> Padrão PT)
+        // 🧠 SISTEMA DE IDIOMA INTELIGENTE (Banco KV -> Celular -> Padrão PT)
         let savedLang = await env.GOLS_FLAMENGO_KV.get(`lang_${userId}`);
         let userLangCode = savedLang || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
         userLangCode = userLangCode.substring(0, 2).toLowerCase();
@@ -174,7 +174,7 @@ export async function processarMensagemTelegram(request, env) {
             await env.GOLS_FLAMENGO_KV.put(`lang_${userId}`, lang);
             const avisos = { pt: "Idioma alterado! 🇧🇷", en: "Language changed! 🇺🇸", es: "¡Idioma cambiado! 🇪🇸" };
             await responderCallback(avisos[lang]);
-            texto = "menu_principal"; // Redireciona para atualizar o menu
+            texto = "menu_principal"; // Redireciona para atualizar o menu principal com o novo idioma
         }
 
         // 🔘 AÇÃO: MOSTRAR MENU DE IDIOMAS
@@ -190,13 +190,43 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+        // 🔘 AÇÃO: CLIQUE NO BOTÃO SUPORTE
+        if (texto === "suporte_bot") {
+            if (isCallback) await responderCallback();
+            
+            const textosSuporte = {
+                pt: `🛠 <b>Suporte ao Usuário</b>\n\nPrecisa de ajuda ou encontrou algum problema?\n\n👉 Entre em contato diretamente com o nosso administrador clicando no botão abaixo ou envie uma mensagem para o suporte oficial.`,
+                en: `🛠 <b>User Support</b>\n\nNeed help or found a bug?\n\n👉 Contact our administrator directly by clicking the button below or send a message to the official support.`,
+                es: `🛠 <b>Soporte de Usuario</b>\n\n¿Necesitas ayuda o encontraste um error?\n\n👉 Contacta directamente com nuestro administrador haciendo clic en el botón de abajo o envía un mensaje al soporte oficial.`
+            };
+
+            const botoesSuporte = {
+                pt: { contato: "💬 Falar com Suporte", voltar: "🔙 Voltar" },
+                en: { contato: "💬 Contact Support", voltar: "🔙 Back" },
+                es: { contato: "💬 Contactar Soporte", voltar: "🔙 Volver" }
+            };
+            const btnSup = botoesSuporte[lang] || botoesSuporte.pt;
+
+            const tecladoSuporte = [
+                [{ text: btnSup.contato, url: "https://t.me/oedutg" }], // ⚠️ Substitua aqui pelo seu link de contato do Telegram
+                [{ text: btnSup.voltar, callback_data: "menu_principal" }]
+            ];
+
+            if (isCallback) {
+                await editarMensagem(textosSuporte[lang], tecladoSuporte);
+            } else {
+                await enviarMensagem(textosSuporte[lang], tecladoSuporte);
+            }
+            return new Response("OK", { status: 200 });
+        }
+
         // ===============================
         // COMANDOS PRINCIPAIS
         // ===============================
         if (texto.startsWith("/start") || texto === "menu_principal") {
             if (isCallback && texto !== "menu_principal") await responderCallback();
 
-            // Bloquinho do resgate do bolão (mantido intacto)
+            // Bloco do bolão (mantido intacto)
             if (texto.startsWith("/start resgatar_") && !texto.startsWith("/start resgatar_br_")) {
                 let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
@@ -247,23 +277,21 @@ export async function processarMensagemTelegram(request, env) {
             const textosMenu = {
                 pt: `👋 Olá ${realName}, seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: ${totalUsers}`,
                 en: `👋 Hello ${realName}, welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: ${totalUsers}`,
-                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en cualquier chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: ${totalUsers}`
+                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: ${totalUsers}`
             };
 
-            // Botões do Menu traduzidos
+            // Dicionário dos Botões Traduzidos (Limpo sem parceiros e perfil)
             const botoesMenu = {
-                pt: { buscar: "Buscar Flamengo", livre: "Busca Livre", parceiros: "Parceiros", perfil: "Meu Perfil", canal: "Canal Oficial", suporte: "Suporte", idioma: "Mudar Idioma" },
-                en: { buscar: "Search Flamengo", livre: "Free Search", parceiros: "Partners", perfil: "My Profile", canal: "Official Channel", suporte: "Support", idioma: "Change Language" },
-                es: { buscar: "Buscar Flamengo", livre: "Búsqueda Libre", parceiros: "Socios", perfil: "Mi Perfil", canal: "Canal Oficial", suporte: "Soporte", idioma: "Cambiar Idioma" }
+                pt: { buscar: "Buscar Flamengo", livre: "Busca Livre", canal: "Canal Oficial", suporte: "Suporte 🛠", idioma: "Mudar Idioma" },
+                en: { buscar: "Search Flamengo", livre: "Free Search", canal: "Official Channel", suporte: "Support 🛠", idioma: "Change Language" },
+                es: { buscar: "Buscar Flamengo", livre: "Búsqueda Libre", canal: "Canal Oficial", suporte: "Soporte 🛠", idioma: "Cambiar Idioma" }
             };
             const btn = botoesMenu[lang] || botoesMenu.pt;
 
             const tecladoMenu = [
                 [{ text: btn.buscar, switch_inline_query_current_chat: "Flamengo" }, { text: btn.livre, switch_inline_query_current_chat: "" }],
-                [{ text: btn.parceiros, callback_data: "partners", icon_custom_emoji_id: "4974685543204913808" }],
-                [{ text: btn.perfil, callback_data: "profile", icon_custom_emoji_id: "5046791202221852143" }, { text: btn.canal, url: "https://t.me/Flamengo77", icon_custom_emoji_id: "5213204168281435721" }],
-                [{ text: btn.suporte, callback_data: "support", icon_custom_emoji_id: "5271619747891388291" }, { text: "Flamengo", url: "https://flamengo.com.br", icon_custom_emoji_id: "5224688610183228070" }],
-                [{ text: btn.idioma, callback_data: "change_lang", icon_custom_emoji_id: "4963072209334567688" }]
+                [{ text: btn.canal, url: "https://t.me/Flamengo77" }],
+                [{ text: btn.suporte, callback_data: "suporte_bot" }, { text: btn.idioma, callback_data: "change_lang" }]
             ];
 
             if (isCallback) {
