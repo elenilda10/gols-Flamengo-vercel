@@ -629,6 +629,144 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+                // ===============================
+        // 🔐 COMANDO ADMIN: /encerrar_bolao (Finalizar Rodada)
+        // ===============================
+        else if (texto.startsWith("/encerrar_bolao")) {
+            // 1. Validação estrita do seu ID de Administradora
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Erro: O seu ID (" + userId + ") não tem permissão para encerrar o bolão.");
+                return new Response("OK", { status: 200 });
+            }
+
+            // 2. Validação de parâmetros recebidos
+            const params = texto.replace(/^\/encerrar_bolao\s*/, "").trim();
+            if (!params || !params.includes("|")) {
+                await enviarMensagem("❌ <b>Formato correto:</b>\n<code>/encerrar_bolao Placar | FileID</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            let input = params.split("|");
+            if (input.length < 2) {
+                await enviarMensagem("❌ <b>Formato correto:</b>\n<code>/encerrar_bolao Placar | FileID</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            let placar = input[0].trim();
+            let fotoResultadoId = input[1].trim();
+
+            if (!placar || !fotoResultadoId) {
+                await enviarMensagem("❌ Informe o placar e o FileID da imagem.\n\nExemplo:\n<code>/encerrar_bolao 2x1 | ID_DA_FOTO</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            // 3. Recupera o ID da postagem ativa do bolão
+            let msgIdOriginal = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+            if (!msgIdOriginal) {
+                await enviarMensagem("❌ Nenhum bolão ativo encontrado.");
+                return new Response("OK", { status: 200 });
+            }
+
+            msgIdOriginal = String(msgIdOriginal);
+
+            // Carrega os metadados do confronto atual
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Jogo";
+            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+
+            if (!vencedoresFinal || vencedoresFinal.trim() === "") {
+                vencedoresFinal = "Nenhum vencedor registrado.";
+            }
+
+            // 4. Grava os dados históricos da rodada encerrada no KV
+            await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
+            await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
+            await env.GOLS_FLAMENGO_KV.put("confronto_" + msgIdOriginal, confronto);
+            await env.GOLS_FLAMENGO_KV.put("BOLAO_RESGATE_ID", msgIdOriginal);
+            await env.GOLS_FLAMENGO_KV.put("ultimo_bolao_encerrado_id", msgIdOriginal);
+            await env.GOLS_FLAMENGO_KV.put("historico_vencedores_" + msgIdOriginal, vencedoresFinal);
+
+            // 5. Atualiza a lista de partidas certeiras no histórico individual de cada vencedor
+            let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + msgIdOriginal);
+            let idsSalvos = winnersRaw ? JSON.parse(winnersRaw) : [];
+
+            for (let i = 0; i < idsSalvos.length; i++) {
+                let vId = String(idsSalvos[i]);
+                let histUserRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + vId);
+                let historicoUser = histUserRaw ? JSON.parse(histUserRaw) : [];
+                let registro = confronto + " → " + placar;
+
+                if (!historicoUser.includes(registro)) {
+                    historicoUser.push(registro);
+                }
+                await env.GOLS_FLAMENGO_KV.put("acertos_" + vId, JSON.stringify(historicoUser));
+            }
+
+            // Sela permanentemente o status do mercado do bolão
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+
+            // 6. Atualiza dinamicamente a legenda do Post original feito no Canal
+            let legendaEditada = 
+                "🏟 <b>BOLÃO ENCERRADO</b> 🔴⚫\n\n" +
+                "⚽ Jogo: <b>" + confronto + "</b>\n" +
+                "✅ Placar Final: <b>" + placar + "</b>\n\n" +
+                "Confira os vencedores abaixo 👇";
+
+            try {
+                await fetch("https://api.telegram.org/bot" + botToken + "/editMessageCaption", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "@Flamengo77",
+                        message_id: Number(msgIdOriginal),
+                        caption: legendaEditada,
+                        parse_mode: "HTML"
+                    })
+                });
+            } catch (e) { console.error("Erro editMessageCaption:", e.message); }
+
+            // 7. Envia a foto oficial do Placar Final respondendo ao post original
+            let legendaResultado = 
+                "🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n" +
+                "⚽ Jogo: <b>" + confronto + "</b>\n" +
+                "📊 Resultado: <b>" + placar + "</b>\n\n" +
+                "🥇 Ganhador(es):\n" + vencedoresFinal + "\n\n" +
+                "🎁 Resgate seu ponto no botão abaixo!";
+
+            let tecladoResgate = [
+                [{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]
+            ];
+
+            try {
+                await fetch("https://api.telegram.org/bot" + botToken + "/sendPhoto", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "@Flamengo77",
+                        photo: fotoResultadoId,
+                        caption: legendaResultado,
+                        reply_to_message_id: Number(msgIdOriginal),
+                        parse_mode: "HTML",
+                        reply_markup: { inline_keyboard: tecladoResgate }
+                    })
+                });
+            } catch (e) { console.error("Erro sendPhoto Resultado:", e.message); }
+
+            // 8. Reseta os estados dinâmicos para deixar o sistema pronto para o próximo jogo
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+
+            // 9. Envia o relatório final consolidado na sua janela privada
+            await enviarMensagem(
+                "✅ <b>Bolão encerrado com sucesso!</b>\n\n" +
+                "🏆 Resultado salvo\n" +
+                "🎁 Resgate liberado\n" +
+                "🕒 Revisão automática disponível por 1 hora\n" +
+                "🔄 Sistema pronto para o próximo jogo!"
+            );
+            return new Response("OK", { status: 200 });
+        }
+
+
 
 
         return new Response("OK", { status: 200 });
