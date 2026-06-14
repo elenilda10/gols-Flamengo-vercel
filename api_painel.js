@@ -775,5 +775,80 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+        // 🏆 APURAÇÃO DO BOLÃO: /api/apurar-bolao (Processa quem acertou e injeta no ranking global)
+    else if (url.pathname === "/api/apurar-bolao" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            const adminId = String(body.admin_id || "");
+            const postId = String(body.post_id || "");
+            const placarReal = String(body.placar_real || "").toLowerCase().trim(); // Ex: "2x1"
+
+            // Trava de segurança para apenas VOCÊ apurar
+            if (adminId !== "7717528550") {
+                return new Response(JSON.stringify({ ok: false, error: "Acesso negado" }), { status: 401, headers: headersCORS });
+            }
+
+            // 1. Puxa todos os palpites temporários acumulados no KV para esta rodada
+            let chaveListaGlobal = "palpites_" + postId;
+            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
+            if (!listaGlobalRaw) {
+                return new Response(JSON.stringify({ ok: false, error: "Nenhum palpite encontrado para esta postagem." }), { status: 404, headers: headersCORS });
+            }
+            let listaPalpites = JSON.parse(listaGlobalRaw);
+
+            // 2. Puxa o ranking global atual e a tabela de nomes para atualizar
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
+
+            let ganhadoresId = [];
+            let contagemGanhadores = 0;
+
+            // 3. Varre os palpites e filtra quem acertou o placar em cheio
+            for (let uid in listaPalpites) {
+                let dadosTorcedor = listaPalpites[uid];
+                
+                if (dadosTorcedor.palpite === placarReal) {
+                    ganhadoresId.push(uid);
+                    contagemGanhadores++;
+
+                    // Soma +1 ponto no ranking global do banco KV
+                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
+                    // Garante que o nome e username mais recentes fiquem salvos
+                    rankingNames[uid] = dadosTorcedor.nome || "Torcedor";
+
+                    // Registra o ID do post na lista de acertos individuais do usuário
+                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
+                    let acertosLista = acertosRaw ? JSON.parse(acertosRaw) : [];
+                    if (!Array.isArray(acertosLista)) acertosLista = [];
+                    if (!acertosLista.includes(postId)) {
+                        acertosLista.push(postId);
+                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
+                    }
+                }
+            }
+
+            // 4. Salva as tabelas atualizadas de volta no banco KV de forma permanente
+            if (contagemGanhadores > 0) {
+                await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
+                await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
+            }
+
+            // 5. Deleta os palpites temporários dessa rodada para limpar o banco KV
+            await env.GOLS_FLAMENGO_KV.delete(chaveListaGlobal);
+
+            return new Response(JSON.stringify({ 
+                ok: true, 
+                ganhadores_contagem: contagemGanhadores,
+                ganhadores_lista: ganhadoresId 
+            }), { status: 200, headers: headersCORS });
+
+        } catch (err) {
+            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+
     return new Response(JSON.stringify({ erro: "Rota não encontrada" }), { status: 404, headers: headersCORS });
 }
