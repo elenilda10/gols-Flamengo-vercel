@@ -123,7 +123,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ NOVO PAINEL VISUAL: /api/painel-addgoal (Renderiza a tela do formulário direto no navegador)
+        // 🖥️ PAINEL VISUAL AJUSTADO RESPONSIVO
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -133,18 +133,30 @@ export async function processarRotaApi(request, env) {
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>⚽ Cloudflare Painel - AddGoal</title>
             <style>
-                body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-                .card { width: 100%; maxWidth: 550px; background: #18181b; border-radius: 20px; padding: 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
-                h1 { margin: 0 0 5px 0; font-size: 26px; font-weight: 800; }
+                body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
+                .card { width: 100%; max-width: 550px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
+                h1 { margin: 0 0 5px 0; font-size: 24px; font-weight: 800; }
                 p { color: #a1a1aa; margin: 0 0 22px 0; font-size: 14px; }
                 .alert { padding: 12px; border-radius: 10px; margin-bottom: 18px; font-size: 14px; font-weight: 600; display: none; border: 1px solid rgba(255,255,255,0.1); }
                 form { display: flex; flex-direction: column; gap: 15px; }
+                
+                /* Layout em grade por padrão (Computadores) */
                 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
                 .field { display: flex; flex-direction: column; gap: 5px; }
                 label { font-size: 12px; font-weight: 600; color: #d4d4d8; }
-                input { background: #09090b; border: "1px solid rgba(255,255,255,0.1)"; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; color: #fff; font-size: 14px; outline: none; }
-                button { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); }
+                input { background: #09090b; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 14px 12px; color: #fff; font-size: 15px; outline: none; width: 100%; box-sizing: border-box; }
+                button { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); width: 100%; }
                 button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+                /* 📱 REGRA TURBO PARA TELEMÓVEIS (Telas menores que 600px) */
+                @media (max-width: 600px) {
+                    body { padding: 10px; }
+                    .card { padding: 20px; border-radius: 16px; }
+                    h1 { font-size: 22px; }
+                    /* Quebra as colunas coladas e faz virarem linhas individuais */
+                    .row { grid-template-columns: 1fr; gap: 15px; }
+                    input { padding: 12px; font-size: 14px; }
+                }
             </style>
         </head>
         <body>
@@ -243,6 +255,9 @@ export async function processarRotaApi(request, env) {
         </body>
         </html>
         `;
+        return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+`;
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
