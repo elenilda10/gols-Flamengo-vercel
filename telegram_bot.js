@@ -6,10 +6,10 @@ export async function processarMensagemTelegram(request, env) {
         // ===============================
         // ⚡ MODO INLINE QUERY (Busca de Gols)
         // ===============================
-if (update.inline_query) {
-    console.log("INLINE RECEBIDO");
+        if (update.inline_query) {
+            console.log("INLINE RECEBIDO");
 
-           const inlineQuery = update.inline_query;
+            const inlineQuery = update.inline_query;
             const busca = inlineQuery.query || "";
             const queryId = inlineQuery.id;
             const offset = parseInt(inlineQuery.offset || "0") || 0;
@@ -35,7 +35,7 @@ if (update.inline_query) {
             const responderInline = async (resultados, proxOffset = "") => {
                 await fetch(`https://api.telegram.org/bot${botToken}/answerInlineQuery`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ inline_query_id: queryId, results: resultados, cache_time: 1, is_personal: true, next_offset: proxOffset })
+                    body: JSON.stringify({ inline_query_id: queryId, results: resultados, cache_time: 0, is_personal: true, next_offset: proxOffset })
                 });
             };
 
@@ -55,113 +55,104 @@ if (update.inline_query) {
 
             let termosOriginais = buscaNorm.split(" ").filter(Boolean);
             let resultados = [];
-const MAX_RESULTS = 50;
-const BATCH_SIZE = 20;
+            const MAX_RESULTS = 50;
+            const BATCH_SIZE = 20;
 
-let totalNoIndex = index.length;
-let i = (totalNoIndex - 1) - offset;
-let itensPercorridos = 0;
+            let totalNoIndex = index.length;
+            let i = (totalNoIndex - 1) - offset;
+            let itensPercorridos = 0;
 
-while (i >= 0 && resultados.length < MAX_RESULTS) {
-let loteIds = [];
+            while (i >= 0 && resultados.length < MAX_RESULTS) {
+                let loteIds = [];
 
-for (let j = 0; j < BATCH_SIZE && (i - j) >= 0; j++) {
-    loteIds.push(index[i - j]);
-}
+                for (let j = 0; j < BATCH_SIZE && (i - j) >= 0; j++) {
+                    loteIds.push(index[i - j]);
+                }
 
-const loteDadosRaw = await Promise.all(
-    loteIds.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`))
-);
+                const loteDadosRaw = await Promise.all(
+                    loteIds.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`))
+                );
 
-for (let j = 0; j < loteDadosRaw.length; j++) {
-    itensPercorridos++;
+                for (let j = 0; j < loteDadosRaw.length; j++) {
+                    // ✅ CORREÇÃO 1: Verificação de limite ANTES de mover ponteiros ou processar
+                    if (resultados.length >= MAX_RESULTS) {
+                        break;
+                    }
 
-    if (resultados.length >= MAX_RESULTS) {
-        break;
-    }
+                    itensPercorridos++;
 
-    const golRaw = loteDadosRaw[j];
-    if (!golRaw) continue;
+                    const golRaw = loteDadosRaw[j];
+                    if (!golRaw) continue;
 
-    const gol = JSON.parse(golRaw);
+                    const gol = JSON.parse(golRaw);
+                    if (!gol?.file_id) continue;
 
-    if (!gol?.file_id) continue;
+                    let baseTarget = safeNormalize(
+                        `${gol.jogo || ""} ${gol.autor || ""} ${gol.assistencia || ""} ${gol.campeonato || ""} ${gol.fase || gol.rodada || ""}`
+                    );
 
-    let baseTarget = safeNormalize(
-        `${gol.jogo || ""} ${gol.autor || ""} ${gol.assistencia || ""} ${gol.campeonato || ""} ${gol.fase || gol.rodada || ""}`
-    );
+                    let campAlias = searchAliases.competitions[safeNormalize(gol.campeonato)] || {};
+                    let extras = [];
 
-    let campAlias =
-        searchAliases.competitions[safeNormalize(gol.campeonato)] || {};
+                    if (campAlias.label) {
+                        extras = [campAlias.label.pt, campAlias.label.en, campAlias.label.es].map(safeNormalize);
+                    }
 
-    let extras = [];
+                    if (campAlias.search) {
+                        extras = extras.concat(campAlias.search.map(safeNormalize));
+                    }
 
-    if (campAlias.label) {
-        extras = [
-            campAlias.label.pt,
-            campAlias.label.en,
-            campAlias.label.es
-        ].map(safeNormalize);
-    }
+                    let textoAlvo = baseTarget + " " + extras.join(" ");
+                    let match = termosOriginais.every(term => textoAlvo.includes(term));
 
-    if (campAlias.search) {
-        extras = extras.concat(
-            campAlias.search.map(safeNormalize)
-        );
-    }
+                    if (!match) continue;
 
-    let textoAlvo = baseTarget + " " + extras.join(" ");
+                    let campLabel = campAlias.label?.[lang] || gol.campeonato || "-";
 
-    let match = termosOriginais.every(term =>
-        textoAlvo.includes(term)
-    );
+                    resultados.push({
+                        type: "video",
+                        id: `vid_${loteIds[j]}_${offset}`,
+                        video_file_id: gol.file_id,
+                        title: gol.jogo || "Gol",
+                        description: `⚽️ ${gol.autor || "-"} | 🏆 ${campLabel}`,
+                        caption:
+                            `<b>${gol.jogo || ""}</b>\n\n` +
+                            `⚽️ ${gol.autor || "-"}\n` +
+                            `🅰 ${gol.assistencia || "-"}\n\n` +
+                            `🏆 ${campLabel} - ${gol.fase || gol.rodada || "-"}\n\n` +
+                            `🤖 @FlamengoGolsBot`,
+                        parse_mode: "HTML"
+                    });
+                }
 
-    if (!match) continue;
+                // Se o loop interno quebrou porque atingiu o limite, saímos do loop externo imediatamente
+                if (resultados.length >= MAX_RESULTS) {
+                    break;
+                }
 
-    let campLabel =
-        campAlias.label?.[lang] ||
-        gol.campeonato ||
-        "-";
+                i -= BATCH_SIZE;
+            }
 
-    resultados.push({
-        type: "video",
-        id: `vid_${loteIds[j]}_${offset}`,
-        video_file_id: gol.file_id,
-        title: gol.jogo || "Gol",
-        description: `⚽️ ${gol.autor || "-"} | 🏆 ${campLabel}`,
-        caption:
-            `<b>${gol.jogo || ""}</b>\n\n` +
-            `⚽️ ${gol.autor || "-"}\n` +
-            `🅰 ${gol.assistencia || "-"}\n\n` +
-            `🏆 ${campLabel} - ${gol.fase || gol.rodada || "-"}\n\n` +
-            `🤖 @FlamengoGolsBot`,
-        parse_mode: "HTML"
-    });
-}
+            // ✅ CORREÇÃO 2: Validação blindada baseada no tamanho absoluto da base percorrida
+            let proximoOffset = "";
+            if (resultados.length === MAX_RESULTS && (offset + itensPercorridos < totalNoIndex)) {
+                proximoOffset = String(offset + itensPercorridos);
+            }
 
-i -= BATCH_SIZE;
+            console.log(
+                JSON.stringify({
+                    busca,
+                    offset,
+                    encontrados: resultados.length,
+                    percorridos: itensPercorridos,
+                    next_offset: proximoOffset
+                })
+            );
 
-}
-
-let proximoOffset = "";
-
-if (resultados.length === MAX_RESULTS && i >= 0) {
-proximoOffset = String(offset + itensPercorridos);
-}
-
-console.log(
-JSON.stringify({
-busca,
-offset,
-encontrados: resultados.length,
-percorridos: itensPercorridos,
-next_offset: proximoOffset
-})
-);
-
-await responderInline(resultados, proximoOffset);
-return new Response("OK", { status: 200 });
+            await responderInline(resultados, proximoOffset);
+            return new Response("OK", { status: 200 });
         }
+
 
                 // ===============================
         // MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
