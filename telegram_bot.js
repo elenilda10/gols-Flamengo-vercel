@@ -965,6 +965,33 @@ export async function processarMensagemTelegram(request, env) {
         }
 
 
+        // ==========================================================
+        // 🚚 DELETAR APÓS A MIGRAÇÃO: Receptor Temporário do TeleBotHost
+        // ==========================================================
+        if (url.pathname === "/api/migrar_backup_dados") {
+            try {
+                // Reaproveita o JSON que já foi lido lá no início do arquivo
+                const payload = update; 
+
+                if (payload.ranking_global) {
+                    await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(payload.ranking_global));
+                }
+                if (payload.ranking_names) {
+                    await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(payload.ranking_names));
+                }
+                if (payload.acertos_usuarios) {
+                    const uids = Object.keys(payload.acertos_usuarios);
+                    for (let i = 0; i < uids.length; i++) {
+                        const currentId = uids[i];
+                        await env.GOLS_FLAMENGO_KV.put("acertos_" + currentId, JSON.stringify(payload.acertos_usuarios[currentId]));
+                    }
+                }
+
+                return new Response(JSON.stringify({ ok: true, mensagem: "Mudanca concluida!" }), { status: 200, headers: headersCORS });
+            } catch (err) {
+                return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
+            }
+        }
 
 
 
