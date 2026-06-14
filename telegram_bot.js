@@ -146,6 +146,7 @@ export async function processarMensagemTelegram(request, env) {
             try {
                 const payload = update; 
 
+
                 if (payload.ranking_global) {
                     await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(payload.ranking_global));
                 }
@@ -159,6 +160,7 @@ export async function processarMensagemTelegram(request, env) {
                         await env.GOLS_FLAMENGO_KV.put("acertos_" + currentId, JSON.stringify(payload.acertos_usuarios[currentId]));
                     }
                 }
+
 
                 return new Response(JSON.stringify({ ok: true, mensagem: "Gravado com sucesso!" }), { status: 200, headers: headersCORS });
             } catch (err) {
