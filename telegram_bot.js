@@ -247,9 +247,10 @@ export async function processarMensagemTelegram(request, env) {
             await enviarMensagem(textosAjuda[lang] || textosAjuda.pt, tecladoAjuda);
         }
 
-        return new Response("OK", { status: 200 });
+                return new Response("OK", { status: 200 });
 
-        } catch (erro) {
+    } catch (erro) {
         console.error("ERRO GRAVE:", erro.message, erro.stack);
         return new Response("OK", { status: 200 });
     }
+}
