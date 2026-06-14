@@ -6,9 +6,8 @@ export async function processarMensagemTelegram(request, env) {
 
     try {
         const update = await request.json();
-        
                 // ==========================================================
-        // ⚡ MODO INLINE QUERY (Busca de Gols com Correção de Idioma)
+        // ⚡ MODO INLINE QUERY (Busca de Gols com Respeito ao Idioma Escolhido)
         // ==========================================================
         if (update.inline_query) {
             console.log("INLINE RECEBIDO");
@@ -17,18 +16,28 @@ export async function processarMensagemTelegram(request, env) {
             const busca = inlineQuery.query || "";
             const queryId = inlineQuery.id;
             const offset = parseInt(inlineQuery.offset || "0") || 0;
+            const uidTelegram = String(inlineQuery.from.id);
             
-            // Força a detecção limpa do idioma. Se tiver "pt", assume português de qualquer lugar do mundo!
-            let userLangCode = String(inlineQuery.from.language_code || "pt").toLowerCase();
-            let lang = "pt"; // Padrão Brasil
-            
-            if (userLangCode.startsWith("en")) {
-                lang = "en";
-            } else if (userLangCode.startsWith("es")) {
-                lang = "es";
+            // 1. Tenta buscar se o usuário salvou uma preferência manual de idioma no KV
+            // (Ajuste o nome dessa chave se o seu robô usar outro padrão, ex: "lang_" + uid)
+            let idiomaSalvo = await env.GOLS_FLAMENGO_KV.get("user_lang_" + uidTelegram);
+            let lang = "pt"; // Padrão de segurança
+
+            if (idiomaSalvo && ["pt", "en", "es"].includes(idiomaSalvo.toLowerCase().trim())) {
+                // Se ele escolheu manualmente no botão, segue estritamente a escolha dele!
+                lang = idiomaSalvo.toLowerCase().trim();
+            } else {
+                // Se ele nunca mudou no botão, segue o idioma nativo do aplicativo do Telegram
+                let userLangCode = String(inlineQuery.from.language_code || "pt").toLowerCase();
+                if (userLangCode.startsWith("en")) {
+                    lang = "en";
+                } else if (userLangCode.startsWith("es")) {
+                    lang = "es";
+                }
             }
 
             const texts = {
+
                 pt: { 
                     search_title: "🔍 Buscar Gols", 
                     search_desc: "Digite jogador, time ou campeonato", 
