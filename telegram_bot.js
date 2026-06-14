@@ -249,8 +249,7 @@ export async function processarMensagemTelegram(request, env) {
 
         return new Response("OK", { status: 200 });
 
-    } catch (erro) {
+        } catch (erro) {
+        console.error("ERRO GRAVE:", erro.message, erro.stack);
         return new Response("OK", { status: 200 });
     }
-}
- 
