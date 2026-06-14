@@ -141,6 +141,77 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+        // ⚽ NOVA API 2.5: /api/addgoal (Para o formulário do site salvar no KV)
+    else if (url.pathname === "/api/addgoal" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            
+            // Validação simples de segurança pelo ID admin enviado pelo formulário
+            if (String(body.admin_id) !== "7717528550") {
+                return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401, headers: headersCORS });
+            }
+
+            const goalId = Date.now();
+            
+            // Função de normalização idêntica à do robô antigo
+            const safeNormalize = (text) => {
+                if (!text) return "";
+                try { text = text.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
+                return text.replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
+            };
+
+            const search = safeNormalize(
+                `${body.jogo || ""} ${body.autor || ""} ${body.assistencia || ""} ${body.campeonato || ""} ${body.fase || ""}`
+            );
+
+            // Monta o objeto exatamente no formato que o sistema consome
+            const goalData = {
+                id: goalId,
+                jogo: body.jogo.trim(),
+                autor: body.autor.trim(),
+                assistencia: body.assistencia.trim(),
+                campeonato: body.campeonato.trim(),
+                fase: body.fase.trim(),
+                file_id: body.file_id.trim(),
+                views: 0,
+                created_at: Date.now(),
+                search: search,
+                admin_id: Number(body.admin_id)
+            };
+
+            // 1. Salva o gol individual
+            await env.GOLS_FLAMENGO_KV.put(`gol_${goalId}`, JSON.stringify(goalData));
+
+            // 2. Atualiza o índice global de gols
+            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
+            let index = indexRaw ? JSON.parse(indexRaw) : [];
+            
+            if (!index.includes(Number(goalId)) && !index.includes(String(goalId))) {
+                index.push(goalId);
+            }
+            await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(index));
+
+            // 3. Envia uma cópia em segundo plano para o seu Canal de Backup do Telegram automaticamente!
+            try {
+                const CANAL_BACKUP = "-1003703318973";
+                await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: CANAL_BACKUP,
+                        video: goalData.file_id,
+                        caption: `📌 <b>Novo gol adicionado via Painel Web</b>\n\n🆔 <code>${goalData.id}</code>\n⚽ ${goalData.jogo}\n\n👟 Autor: ${goalData.autor}\n🅰 Assistência: ${goalData.assistencia}\n🏆 ${goalData.campeonato} - ${goalData.fase}`,
+                        parse_mode: "HTML"
+                    })
+                });
+            } catch (eTelegram) { console.error("Erro envio canal:", eTelegram.message); }
+
+            return new Response(JSON.stringify({ ok: true, id: goalId }), { status: 200, headers: headersCORS });
+        } catch (err) {
+            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
     // 🔄 ROTA 3: Rota de Migração do Acervo Antigo (Mantida Intacta)
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
