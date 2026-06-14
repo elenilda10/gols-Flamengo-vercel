@@ -53,61 +53,112 @@ export async function processarMensagemTelegram(request, env) {
 
             let termosOriginais = buscaNorm.split(" ").filter(Boolean);
             let resultados = [];
-            const MAX_RESULTS = 10;
-            const BATCH_SIZE = 20;
+const MAX_RESULTS = 10;
+const BATCH_SIZE = 20;
 
-            let totalNoIndex = index.length;
-            let i = (totalNoIndex - 1) - offset;
-            let itensPercorridos = 0;
+let totalNoIndex = index.length;
+let i = (totalNoIndex - 1) - offset;
+let itensPercorridos = 0;
 
-            while (i >= 0 && resultados.length < MAX_RESULTS) {
-                let loteIds = [];
-                for (let j = 0; j < BATCH_SIZE && (i - j) >= 0; j++) {
-                    loteIds.push(index[i - j]);
-                }
+while (i >= 0 && resultados.length < MAX_RESULTS) {
+let loteIds = [];
 
-                let promises = loteIds.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`));
-                let loteDadosRaw = await Promise.all(promises);
+for (let j = 0; j < BATCH_SIZE && (i - j) >= 0; j++) {
+    loteIds.push(index[i - j]);
+}
 
-                for (let j = 0; j < loteDadosRaw.length; j++) {
-                    itensPercorridos++;
-                    if (resultados.length >= MAX_RESULTS) break;
+const loteDadosRaw = await Promise.all(
+    loteIds.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`))
+);
 
-                    let golRaw = loteDadosRaw[j];
-                    if (golRaw) {
-                        let gol = JSON.parse(golRaw);
-                        if (gol && gol.file_id) {
-                            let baseTarget = safeNormalize(`${gol.jogo || ""} ${gol.autor || ""} ${gol.assistencia || ""} ${gol.campeonato || ""} ${gol.fase || ""}`);
-                            let campAlias = searchAliases.competitions[safeNormalize(gol.campeonato)] || {};
-                            let extras = [];
-                            if (campAlias.label) extras = [campAlias.label.pt, campAlias.label.en, campAlias.label.es].map(safeNormalize);
-                            if (campAlias.search) extras = extras.concat(campAlias.search.map(safeNormalize));
-                            
-                            let textoAlvo = baseTarget + " " + extras.join(" ");
-                            let match = termosOriginais.every(term => textoAlvo.includes(term));
+for (let j = 0; j < loteDadosRaw.length; j++) {
+    itensPercorridos++;
 
-                            if (match) {
-                                let campLabel = (campAlias.label && campAlias.label[lang]) ? campAlias.label[lang] : (gol.campeonato || "-");
-                                resultados.push({
-                                    type: "video", id: "vid_" + loteIds[j], video_file_id: gol.file_id, title: gol.jogo || "Gol",
-                                    description: `⚽️ ${gol.autor || "-"} | 🏆 ${campLabel}`,
-                                    caption: `<b>${gol.jogo || ""}</b>\n\n⚽️ ${gol.autor || "-"}\n🅰 ${gol.assistencia || "-"}\n\n🏆 ${campLabel} - ${gol.fase || "-"}\n\n🤖 @FlamengoGolsBot`,
-                                    parse_mode: "HTML"
-                                });
-                            }
-                        }
-                    }
-                }
-                 i -= BATCH_SIZE;
-            }
+    if (resultados.length >= MAX_RESULTS) {
+        break;
+    }
 
-             let proximoOffset = "";
+    const golRaw = loteDadosRaw[j];
+    if (!golRaw) continue;
 
-      // Log de Debug para você acompanhar no painel da Cloudflare
-        console.log(`Debug Paginação: offset=${offset}, percorridos=${itensPercorridos}, prox=${proximoOffset}, encontrados=${resultados.length}`);
-            await responderInline(resultados, proximoOffset);
-            return new Response("OK", { status: 200 });
-        }
+    const gol = JSON.parse(golRaw);
+
+    if (!gol?.file_id) continue;
+
+    let baseTarget = safeNormalize(
+        `${gol.jogo || ""} ${gol.autor || ""} ${gol.assistencia || ""} ${gol.campeonato || ""} ${gol.fase || gol.rodada || ""}`
+    );
+
+    let campAlias =
+        searchAliases.competitions[safeNormalize(gol.campeonato)] || {};
+
+    let extras = [];
+
+    if (campAlias.label) {
+        extras = [
+            campAlias.label.pt,
+            campAlias.label.en,
+            campAlias.label.es
+        ].map(safeNormalize);
+    }
+
+    if (campAlias.search) {
+        extras = extras.concat(
+            campAlias.search.map(safeNormalize)
+        );
+    }
+
+    let textoAlvo = baseTarget + " " + extras.join(" ");
+
+    let match = termosOriginais.every(term =>
+        textoAlvo.includes(term)
+    );
+
+    if (!match) continue;
+
+    let campLabel =
+        campAlias.label?.[lang] ||
+        gol.campeonato ||
+        "-";
+
+    resultados.push({
+        type: "video",
+        id: `vid_${loteIds[j]}_${offset}`,
+        video_file_id: gol.file_id,
+        title: gol.jogo || "Gol",
+        description: `⚽️ ${gol.autor || "-"} | 🏆 ${campLabel}`,
+        caption:
+            `<b>${gol.jogo || ""}</b>\n\n` +
+            `⚽️ ${gol.autor || "-"}\n` +
+            `🅰 ${gol.assistencia || "-"}\n\n` +
+            `🏆 ${campLabel} - ${gol.fase || gol.rodada || "-"}\n\n` +
+            `🤖 @FlamengoGolsBot`,
+        parse_mode: "HTML"
+    });
+}
+
+i -= BATCH_SIZE;
+
+}
+
+let proximoOffset = "";
+
+if (resultados.length === MAX_RESULTS && i >= 0) {
+proximoOffset = String(offset + itensPercorridos);
+}
+
+console.log(
+JSON.stringify({
+busca,
+offset,
+encontrados: resultados.length,
+percorridos: itensPercorridos,
+next_offset: proximoOffset
+})
+);
+
+await responderInline(resultados, proximoOffset);
+return new Response("OK", { status: 200 });
 
                 // ===============================
         // MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
