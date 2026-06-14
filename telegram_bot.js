@@ -769,6 +769,77 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
+        // ==========================================================
+// 🔐 COMANDO ADMIN: /getid (Capturar FileID de Mídias)
+// ==========================================================
+if (texto.startsWith("/getid")) {
+    // Validação de segurança para o seu ID de Administrador
+    if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+    if (!update.message || !update.message.reply_to_message) {
+        await enviarMensagem("❌ Responda a uma imagem, vídeo, GIF ou arquivo.");
+        return new Response("OK", { status: 200 });
+    }
+
+    const msgReply = update.message.reply_to_message;
+    let fileId = "";
+    let tipoMidia = "";
+
+    // 🖼️ RECONHECER IMAGEM (FOTO)
+    if (msgReply.photo && msgReply.photo.length > 0) {
+        fileId = msgReply.photo[msgReply.photo.length - 1].file_id;
+        tipoMidia = "🖼 Tipo: FOTO";
+    }
+    // 📹 RECONHECER VÍDEO
+    else if (msgReply.video) {
+        fileId = msgReply.video.file_id;
+        tipoMidia = "📹 Tipo: VIDEO";
+    }
+    // 📁 RECONHECER DOCUMENTO (ARQUIVO)
+    else if (msgReply.document) {
+        fileId = msgReply.document.file_id;
+        tipoMidia = "📁 Tipo: DOCUMENT";
+    }
+    // 🎞️ RECONHECER GIF (ANIMATION)
+    else if (msgReply.animation) {
+        fileId = msgReply.animation.file_id;
+        tipoMidia = "🎞 Tipo: GIF";
+    }
+
+    // Se não for nenhuma mídia válida, para o fluxo
+    if (!fileId) {
+        await enviarMensagem("❌ Tipo de mídia não suportado.");
+        return new Response("OK", { status: 200 });
+    }
+
+    const textoResposta = `${tipoMidia}\n\n🆔 <b>FileID:</b>\n<code>${fileId}</code>`;
+    
+    // Configura o botão nativo do Telegram que copia o texto ao ser clicado
+    const tecladoCopiar = [
+        [{ 
+            text: "📋 Copiar FileID", 
+            copy_text: { text: fileId } 
+        }]
+    ];
+
+    // Dispara a mensagem com o botão de cópia rápida
+    let body = { 
+        chat_id: chatId, 
+        text: textoResposta, 
+        parse_mode: "HTML", 
+        reply_markup: { inline_keyboard: tecladoCopiar } 
+    };
+    
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify(body) 
+    });
+
+    return new Response("OK", { status: 200 });
+}
+
+
         return new Response("OK", { status: 200 });
 
     } catch (erro) {
