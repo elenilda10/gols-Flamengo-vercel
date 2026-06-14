@@ -53,7 +53,7 @@ export async function processarMensagemTelegram(request, env) {
 
             let termosOriginais = buscaNorm.split(" ").filter(Boolean);
             let resultados = [];
-const MAX_RESULTS = 10;
+const MAX_RESULTS = 50;
 const BATCH_SIZE = 20;
 
 let totalNoIndex = index.length;
