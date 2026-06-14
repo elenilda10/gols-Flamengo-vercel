@@ -106,7 +106,7 @@ export async function processarMensagemTelegram(request, env) {
             return new Response("OK", { status: 200 });
         }
 
-        // ===============================
+                // ===============================
         // MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
         // ===============================
         let mensagem, texto, chatId, userId, userFirstName, userLastName, isCallback = false, callbackId;
@@ -120,15 +120,14 @@ export async function processarMensagemTelegram(request, env) {
             userId = update.callback_query.from.id;
             userFirstName = update.callback_query.from.first_name || "Torcedor";
             userLastName = update.callback_query.from.last_name || "";
-                } else if (update.message) {
+        } else if (update.message) {
             mensagem = update.message;
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
             userFirstName = mensagem.from.first_name || "Torcedor";
             userLastName = mensagem.from.last_name || "";
-        }
- else {
+        } else {
             return new Response("OK", { status: 200 });
         }
 
@@ -148,14 +147,19 @@ export async function processarMensagemTelegram(request, env) {
             await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
 
-        const responderCallback = async () => {
-            await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ callback_query_id: callbackId }) });
+        const responderCallback = async (aviso = "") => {
+            let body = { callback_query_id: callbackId };
+            if (aviso) body.text = aviso;
+            await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
 
-        let userLangCode = (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
+        // 🧠 SISTEMA DE IDIOMA INTELIGENTE (Busca no Banco -> Tenta do Celular -> Padrão PT)
+        let savedLang = await env.GOLS_FLAMENGO_KV.get(`lang_${userId}`);
+        let userLangCode = savedLang || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
         userLangCode = userLangCode.substring(0, 2).toLowerCase();
         let lang = ["pt", "en", "es"].includes(userLangCode) ? userLangCode : "pt";
 
+        // Registro de novos usuários
         let userExiste = await env.GOLS_FLAMENGO_KV.get(`user_${userId}`);
         if (!userExiste) {
             await env.GOLS_FLAMENGO_KV.put(`user_${userId}`, "true");
@@ -164,12 +168,37 @@ export async function processarMensagemTelegram(request, env) {
         }
         let totalUsers = await env.GOLS_FLAMENGO_KV.get("TOTAL_USERS") || 1;
 
-        if (texto.startsWith("/start")) {
-            if (isCallback) await responderCallback();
+        // 🔘 AÇÃO: SALVAR IDIOMA ESCOLHIDO
+        if (texto.startsWith("set_lang_")) {
+            lang = texto.replace("set_lang_", "");
+            await env.GOLS_FLAMENGO_KV.put(`lang_${userId}`, lang);
+            const avisos = { pt: "Idioma alterado! 🇧🇷", en: "Language changed! 🇺🇸", es: "¡Idioma cambiado! 🇪🇸" };
+            await responderCallback(avisos[lang]);
+            texto = "menu_principal"; // Redireciona para atualizar o menu
+        }
 
-            let params = texto.replace("/start", "").trim();
-            
-            if (params.startsWith("resgatar_") && !params.startsWith("resgatar_br_")) {
+        // 🔘 AÇÃO: MOSTRAR MENU DE IDIOMAS
+        if (texto === "change_lang") {
+            const txtIdioma = { pt: "🌐 Selecione o seu idioma:", en: "🌐 Select your language:", es: "🌐 Seleccione su idioma:" };
+            const tecladoIdioma = [
+                [{ text: "🇧🇷 Português", callback_data: "set_lang_pt" }],
+                [{ text: "🇺🇸 English", callback_data: "set_lang_en" }],
+                [{ text: "🇪🇸 Español", callback_data: "set_lang_es" }],
+                [{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]
+            ];
+            if (isCallback) await editarMensagem(txtIdioma[lang], tecladoIdioma);
+            return new Response("OK", { status: 200 });
+        }
+
+        // ===============================
+        // COMANDOS PRINCIPAIS
+        // ===============================
+        if (texto.startsWith("/start") || texto === "menu_principal") {
+            if (isCallback && texto !== "menu_principal") await responderCallback();
+
+            // Bloquinho do resgate do bolão (mantido intacto)
+            if (texto.startsWith("/start resgatar_") && !texto.startsWith("/start resgatar_br_")) {
+                let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
                 let confronto = await env.GOLS_FLAMENGO_KV.get(`confronto_${postagemId}`) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Partida não informada";
                 let resultadoOficial = await env.GOLS_FLAMENGO_KV.get(`resultado_oficial_${postagemId}`) || "Resultado ainda não informado";
@@ -202,10 +231,8 @@ export async function processarMensagemTelegram(request, env) {
                     let chaveAcertosTotal = `acertos_total_${userId}`;
                     let acertos = Number(await env.GOLS_FLAMENGO_KV.get(chaveAcertosTotal) || 0) + 1;
                     await env.GOLS_FLAMENGO_KV.put(chaveAcertosTotal, String(acertos));
-
                     let jaVerificou = await env.GOLS_FLAMENGO_KV.get(`resgate_verificado_${postagemId}_${userId}`);
                     let textoExtra = jaVerificou === "true" ? "\n🛠 Seu acerto foi reconhecido após a conferência manual." : "";
-
                     await enviarMensagem(`🎯 ${mention}, seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n✅ Status: <b>Você ganhou!</b>${textoExtra}\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>${acertos}</b>`);
                     return new Response("OK", { status: 200 });
                 }
@@ -216,39 +243,48 @@ export async function processarMensagemTelegram(request, env) {
                 return new Response("OK", { status: 200 });
             }
 
+            // Textos principais do Menu
             const textosMenu = {
-                pt: `👋 Olá ${realName}, seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários activos: ${totalUsers}`,
-                en: `👋 Hello ${realName}, welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /ajuda\n\n▶️ Active users: ${totalUsers}`,
-                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en cualquier chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ajuda\n\n▶️ Usuarios activos: ${totalUsers}`
+                pt: `👋 Olá ${realName}, seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: ${totalUsers}`,
+                en: `👋 Hello ${realName}, welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: ${totalUsers}`,
+                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en cualquier chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: ${totalUsers}`
             };
 
+            // Botões do Menu traduzidos
+            const botoesMenu = {
+                pt: { buscar: "Buscar Flamengo", livre: "Busca Livre", parceiros: "Parceiros", perfil: "Meu Perfil", canal: "Canal Oficial", suporte: "Suporte", idioma: "Mudar Idioma" },
+                en: { buscar: "Search Flamengo", livre: "Free Search", parceiros: "Partners", perfil: "My Profile", canal: "Official Channel", suporte: "Support", idioma: "Change Language" },
+                es: { buscar: "Buscar Flamengo", livre: "Búsqueda Libre", parceiros: "Socios", perfil: "Mi Perfil", canal: "Canal Oficial", suporte: "Soporte", idioma: "Cambiar Idioma" }
+            };
+            const btn = botoesMenu[lang] || botoesMenu.pt;
+
             const tecladoMenu = [
-                [{ text: "Buscar Flamengo", switch_inline_query_current_chat: "Flamengo" }, { text: "Busca Livre", switch_inline_query_current_chat: "" }],
-                [{ text: "Parceiros", callback_data: "partners", icon_custom_emoji_id: "4974685543204913808" }],
-                [{ text: "Meu Perfil", callback_data: "profile", icon_custom_emoji_id: "5046791202221852143" }, { text: "Canal Oficial", url: "https://t.me/Flamengo77", icon_custom_emoji_id: "5213204168281435721" }],
-                [{ text: "Suporte", callback_data: "support", icon_custom_emoji_id: "5271619747891388291" }, { text: "Flamengo", url: "https://flamengo.com.br", icon_custom_emoji_id: "5224688610183228070" }],
-                [{ text: "Mudar Idioma", callback_data: "change_lang", icon_custom_emoji_id: "4963072209334567688" }]
+                [{ text: btn.buscar, switch_inline_query_current_chat: "Flamengo" }, { text: btn.livre, switch_inline_query_current_chat: "" }],
+                [{ text: btn.parceiros, callback_data: "partners", icon_custom_emoji_id: "4974685543204913808" }],
+                [{ text: btn.perfil, callback_data: "profile", icon_custom_emoji_id: "5046791202221852143" }, { text: btn.canal, url: "https://t.me/Flamengo77", icon_custom_emoji_id: "5213204168281435721" }],
+                [{ text: btn.suporte, callback_data: "support", icon_custom_emoji_id: "5271619747891388291" }, { text: "Flamengo", url: "https://flamengo.com.br", icon_custom_emoji_id: "5224688610183228070" }],
+                [{ text: btn.idioma, callback_data: "change_lang", icon_custom_emoji_id: "4963072209334567688" }]
             ];
 
             if (isCallback) {
-                await editarMensagem(textosMenu[lang] || textosMenu.pt, tecladoMenu);
+                await editarMensagem(textosMenu[lang], tecladoMenu);
             } else {
-                await enviarMensagem(textosMenu[lang] || textosMenu.pt, tecladoMenu);
+                await enviarMensagem(textosMenu[lang], tecladoMenu);
             }
         }
 
-        else if (texto === "/ajuda" || texto === "/help") {
+        else if (texto === "/ajuda" || texto === "/help" || texto === "/ayuda") {
             const textosAjuda = {
                 pt: `🆘 <b>Central de Ajuda - Flamengo Gols Bot</b>\n\nBem-vindo ao bot oficial de gols do Flamengo! 🔴⚫\n\n🚀 <b>Como usar no modo inline</b>\nVocê pode buscar gols direto em qualquer chat, grupo ou conversa, sem precisar abrir o bot.\n\n<b>Passo a passo:</b>\n1️⃣ Vá para qualquer grupo\n2️⃣ Digite: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Escolha o resultado e envie! 🎥🔥`,
                 en: `🆘 <b>Help Center - Flamengo Goals Bot</b>\n\nWelcome to the official Flamengo goals bot! 🔴⚫\n\n🚀 <b>How to use inline mode</b>\nSearch goals directly in any chat without opening the bot.\n\n<b>Step by step:</b>\n1️⃣ Go to any group\n2️⃣ Type: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Choose the result and send! 🎥🔥`,
-                es: `🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de goles del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en cualquier chat sin abrir el bot.\n\n<b>Paso a passo:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥`
+                es: `🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de goles del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en cualquier chat sin abrir el bot.\n\n<b>Paso a paso:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥`
             };
 
-            const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "/start" }]];
-            await enviarMensagem(textosAjuda[lang] || textosAjuda.pt, tecladoAjuda);
+            const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]];
+            await enviarMensagem(textosAjuda[lang], tecladoAjuda);
         }
 
-                return new Response("OK", { status: 200 });
+        return new Response("OK", { status: 200 });
 
     } catch (erro) {
         console.error("ERRO GRAVE:", erro.message, erro.stack);
