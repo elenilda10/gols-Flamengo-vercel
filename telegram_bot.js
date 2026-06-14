@@ -10,9 +10,9 @@ if (update.inline_query) {
     console.log("INLINE RECEBIDO");
 
     const inlineQuery = update.inline_query;
-    ..
+    
 
-.            const inlineQuery = update.inline_query;
+           const inlineQuery = update.inline_query;
             const busca = inlineQuery.query || "";
             const queryId = inlineQuery.id;
             const offset = parseInt(inlineQuery.offset || "0") || 0;
