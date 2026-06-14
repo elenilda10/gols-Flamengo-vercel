@@ -195,8 +195,8 @@ export async function processarMensagemTelegram(request, env) {
         }
 
 
-        // ==========================================================
-        // 🔘 MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
+                // ==========================================================
+        // 🔘 MODO MENSAGEM OU CALLBACK (BOTÕES CHAT - CORRIGIDO)
         // ==========================================================
         let mensagem, texto, chatId, userId, userFirstName, userLastName, isCallback = false, callbackId;
 
@@ -214,8 +214,8 @@ export async function processarMensagemTelegram(request, env) {
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
-            userFirstName = message.from.first_name || "Torcedor";
-            userLastName = message.from.last_name || "";
+            userFirstName = mensagem.from.first_name || "Torcedor"; // ✅ Corrigido para mensagem!
+            userLastName = mensagem.from.last_name || "";   // ✅ Corrigido para mensagem!
         } else {
             return new Response("OK", { status: 200 });
         }
@@ -241,6 +241,7 @@ export async function processarMensagemTelegram(request, env) {
             if (aviso) body.text = aviso;
             await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
+
 
         let savedLang = await env.GOLS_FLAMENGO_KV.get(`lang_${userId}`);
         let userLangCode = savedLang || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
