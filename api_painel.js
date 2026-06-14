@@ -554,10 +554,9 @@ export async function processarRotaApi(request, env) {
             const userId = String(data.user_id || "");
             const textoOriginal = String(data.texto_bruto || "").trim();
 
-            // 1. Verifica se o bolão está aberto direto no KV da Cloudflare
             let bolaoStatus = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
             if (bolaoStatus === "false" || bolaoStatus === null) {
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
@@ -569,47 +568,40 @@ export async function processarRotaApi(request, env) {
                 return new Response(JSON.stringify({ ok: false, error: "fechado" }), { status: 200, headers: headersCORS });
             }
 
-            // 2. Trava anti-duplicação: Confere se o torcedor já enviou palpite para esse PostID no KV
-            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_${postId}_${userId}`);
+            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_\${postId}_\${userId}`);
             if (palpiteExistente) {
                 let jsp = JSON.parse(palpiteExistente);
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
                         reply_to_message_id: Number(data.message_id), 
                         parse_mode: "Markdown", 
-                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
+                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *\${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
                     })
                 });
                 return new Response(JSON.stringify({ ok: false, error: "duplicado" }), { status: 200, headers: headersCORS });
             }
 
-            // 3. Mecanismo Extrator e Higienizador de Placar (Transferido para a Cloudflare)
             let limpo = textoOriginal.replace(/×/g, "x").replace(/X/g, "x").replace(/–|—/g, "-").replace(/\s+/g, " ").trim();
-            
-            // Regex Tipo 1: Direto (Ex: "2x1", "2-1", "2 a 1")
             let direto = limpo.match(/(?:^|\D)(\d{1,2})\s*(?:x|-|a)\s*(\d{1,2})(?:\D|$)/i);
             
             let casa = "", fora = "", valido = false, tipoPlacar = "";
             if (direto) { 
                 casa = direto[1]; fora = direto[2]; valido = true; tipoPlacar = "direto"; 
             } else {
-                // Remove horários e tenta Regex Tipo 2: Com Nomes (Ex: "Flamengo 1 Bahia 0")
                 let semHorario = limpo.replace(/\b\d{1,2}\s*h\s*\d{0,2}\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ").replace(/\s+/g, " ").trim();
                 let comTimes = semHorario.match(/(?:^|[\s.,;:!?])([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})\s+([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})(?:$|[\s.,;:!?])/i);
                 if (comTimes) { 
                     casa = comTimes[2]; fora = comTimes[4]; valido = true; tipoPlacar = "times"; 
                 } else {
-                    // Regex Tipo 3: Duas palavras numéricas isoladas no texto
                     let numeros = semHorario.match(/\b\d{1,2}\b/g);
                     if (numeros && numeros.length === 2) { casa = numeros[0]; fora = numeros[1]; valido = true; tipoPlacar = "dois_numeros"; }
                 }
             }
 
-            // 4. Se o palpite for confuso, devolve o erro padrão
             if (!valido) {
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
@@ -621,7 +613,6 @@ export async function processarRotaApi(request, env) {
                 return new Response(JSON.stringify({ ok: false, error: "invalido" }), { status: 200, headers: headersCORS });
             }
 
-            // String limpa formatada
             let palpiteFinal = casa + "x" + fora;
 
             let palpiteObjeto = {
@@ -636,17 +627,15 @@ export async function processarRotaApi(request, env) {
                 timestamp: Date.now()
             };
 
-            // 5. Salva na tabela global da rodada e cria o espelho individual do usuário no KV
             let chaveListaGlobal = "palpites_" + postId;
             let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
             let listaGlobal = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
             listaGlobal[userId] = palpiteObjeto;
             
             await env.GOLS_FLAMENGO_KV.put(chaveListaGlobal, JSON.stringify(listaGlobal));
-            await env.GOLS_FLAMENGO_KV.put(`palpite_user_${postId}_${userId}`, JSON.stringify(palpiteObjeto));
+            await env.GOLS_FLAMENGO_KV.put(`palpite_user_\${postId}_\${userId}`, JSON.stringify(palpiteObjeto));
 
-            // 6. Confirma o recebimento colocando apenas a reação de 👍 na mensagem do comentário
-            await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+            await fetch(`https://api.telegram.org/bot\${botToken}/setMessageReaction`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
                     chat_id: data.chat_id, 
@@ -752,11 +741,11 @@ export async function processarRotaApi(request, env) {
             try {
                 const CANAL_BACKUP = "-1003703318973";
                 const txtStatus = isEditing ? "📝 Gol editado e modificado" : "📌 Novo gol adicionado";
-                await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+                await fetch(`https://api.telegram.org/bot\${botToken}/sendVideo`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         chat_id: CANAL_BACKUP, video: goalData.file_id,
-                        caption: `📌 <b>\${txtStatus} via Painel Web</b>\n\n🆔 <code>\${goalData.id}</code>\n⚽ \${goalData.jogo}\n\n👟 Autor: \${goalData.autor}\n🅰 Assistência: \${goalData.assistencia}\n🏆 \${goalData.campeonato} - \${goalData.fase}`,
+                        caption: `📌 <b>\${txtStatus} via Painel Web</b>\n\n🆔 <code>\${goalData.id}</code>\n⚽ \${goalData.jogo}\n\n#⃣ Autor: \${goalData.autor}\n🅰 Assistência: \${goalData.assistencia}\n🏆 \${goalData.campeonato} - \${goalData.fase}`,
                         parse_mode: "HTML"
                     })
                 });
