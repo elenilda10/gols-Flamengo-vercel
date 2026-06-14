@@ -159,6 +159,7 @@ next_offset: proximoOffset
 
 await responderInline(resultados, proximoOffset);
 return new Response("OK", { status: 200 });
+        }
 
                 // ===============================
         // MODO MENSAGEM OU CALLBACK (BOTÕES CHAT)
