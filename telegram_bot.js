@@ -846,37 +846,40 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        // ==========================================================
+                // ==========================================================
         // 🔐 COMANDO ADMIN: /add_clone (Criar novo bot clone)
         // ==========================================================
         else if (texto.startsWith("/add_clone")) {
             if (String(userId) !== "7717528550") {
-                await enviarMensagem("❌ Acesso negado ao clone. O seu ID atual é: <code>" + userId + "</code>");
+                await enviarMensagem("❌ Acesso negado.");
                 return new Response("OK", { status: 200 });
             }
 
             const novoToken = texto.replace("/add_clone", "").trim();
-
-            if (!novoToken || !novoToken.includes(":")) {
-                await enviarMensagem("❌ <b>Token inválido.</b>\nEnvie o token exato que o @BotFather lhe deu.\nEx: <code>/add_clone 123456:AAEF...</code>");
+            if (!novoToken.includes(":")) {
+                await enviarMensagem("❌ Token inválido.");
                 return new Response("OK", { status: 200 });
             }
 
-            const workerUrlBase = "https://lucky-bar-5077.futvert.workers.dev/bot/";
-            const webhookDoClone = workerUrlBase + novoToken;
+            // URL do seu Worker
+            const workerUrl = "https://lucky-bar-5077.futvert.workers.dev/bot/" + novoToken;
+            
+            // Usamos parâmetros para evitar erros de interpretação do Telegram
+            const params = new URLSearchParams({ url: workerUrl });
+            const urlFinal = `https://api.telegram.org/bot${novoToken}/setWebhook?${params.toString()}`;
 
             try {
-                const respostaTg = await fetch(`https://api.telegram.org/bot${novoToken}/setWebhook?url=${webhookDoClone}`);
+                const respostaTg = await fetch(urlFinal);
                 const resultadoTg = await respostaTg.json();
 
                 if (resultadoTg.ok) {
                     await env.GOLS_FLAMENGO_KV.put(`clone_ativo_${novoToken}`, "true");
-                    await enviarMensagem("✅ <b>SISTEMA CLONADO COM SUCESSO!</b>\n\nO novo bot já está ligado à sua Cloudflare e tem as mesmas funcionalidades.");
+                    await enviarMensagem("✅ <b>SUCESSO!</b>\nO novo bot foi clonado e o Webhook está ativo.");
                 } else {
-                    await enviarMensagem("❌ <b>Erro na clonagem (Telegram):</b> " + resultadoTg.description);
+                    await enviarMensagem("❌ <b>Erro Telegram:</b> " + resultadoTg.description);
                 }
             } catch (e) {
-                await enviarMensagem("❌ <b>Erro de servidor:</b> " + e.message);
+                await enviarMensagem("❌ <b>Erro na conexão:</b> " + e.message);
             }
             return new Response("OK", { status: 200 });
         }
