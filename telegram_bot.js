@@ -23,9 +23,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
     try {
         const update = await request.json();
-        // ... (o resto do seu código continua igualzinho aqui para baixo)
 
-        
         // ==========================================================
         // ⚡ MODO INLINE QUERY (Busca de Gols com Respeito ao Idioma Escolhido)
         // ==========================================================
@@ -38,14 +36,12 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const offset = parseInt(inlineQuery.offset || "0") || 0;
             const uidTelegram = String(inlineQuery.from.id);
             
-            // 🎯 CONSERTADO: Busca exatamente a mesma chave que o modo botão altera!
             let idiomaSalvo = await env.GOLS_FLAMENGO_KV.get(`lang_${uidTelegram}`);
             let lang = "pt"; // Padrão de segurança
 
             if (idiomaSalvo && ["pt", "en", "es"].includes(idiomaSalvo.toLowerCase().trim())) {
                 lang = idiomaSalvo.toLowerCase().trim();
             } else {
-                // Se ele nunca mudou no botão, segue o idioma nativo do aplicativo do Telegram
                 let userLangCode = String(inlineQuery.from.language_code || "pt").toLowerCase();
                 if (userLangCode.startsWith("en")) {
                     lang = "en";
@@ -105,7 +101,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     body: JSON.stringify({ 
                         inline_query_id: queryId, 
                         results: resultados, 
-                        cache_time: 0, // Garante atualização instantânea na mudança de idioma
+                        cache_time: 0, 
                         is_personal: true, 
                         next_offset: proxOffset 
                     })
@@ -214,8 +210,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
 
-                // ==========================================================
-        // 🔘 MODO MENSAGEM OU CALLBACK (BOTÕES CHAT - CORRIGIDO)
+        // ==========================================================
+        // 🔘 MODO MENSAGEM OU CALLBACK
         // ==========================================================
         let mensagem, texto, chatId, userId, userFirstName, userLastName, isCallback = false, callbackId;
 
@@ -233,8 +229,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             texto = mensagem.text || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
-            userFirstName = mensagem.from.first_name || "Torcedor"; // ✅ Corrigido para mensagem!
-            userLastName = mensagem.from.last_name || "";   // ✅ Corrigido para mensagem!
+            userFirstName = mensagem.from.first_name || "Torcedor"; 
+            userLastName = mensagem.from.last_name || "";   
         } else {
             return new Response("OK", { status: 200 });
         }
@@ -789,90 +785,115 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-// 🔐 COMANDO ADMIN: /getid (Capturar FileID de Mídias)
-// ==========================================================
-if (texto.startsWith("/getid")) {
-    // Validação de segurança para o seu ID de Administrador
-    if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+        // 🔐 COMANDO ADMIN: /getid (Capturar FileID de Mídias)
+        // ==========================================================
+        else if (texto.startsWith("/getid")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
-    if (!update.message || !update.message.reply_to_message) {
-        await enviarMensagem("❌ Responda a uma imagem, vídeo, GIF ou arquivo.");
-        return new Response("OK", { status: 200 });
-    }
+            if (!update.message || !update.message.reply_to_message) {
+                await enviarMensagem("❌ Responda a uma imagem, vídeo, GIF ou arquivo.");
+                return new Response("OK", { status: 200 });
+            }
 
-    const msgReply = update.message.reply_to_message;
-    let fileId = "";
-    let tipoMidia = "";
+            const msgReply = update.message.reply_to_message;
+            let fileId = "";
+            let tipoMidia = "";
 
-    // 🖼️ RECONHECER IMAGEM (FOTO)
-    if (msgReply.photo && msgReply.photo.length > 0) {
-        fileId = msgReply.photo[msgReply.photo.length - 1].file_id;
-        tipoMidia = "🖼 Tipo: FOTO";
-    }
-    // 📹 RECONHECER VÍDEO
-    else if (msgReply.video) {
-        fileId = msgReply.video.file_id;
-        tipoMidia = "📹 Tipo: VIDEO";
-    }
-    // 📁 RECONHECER DOCUMENTO (ARQUIVO)
-    else if (msgReply.document) {
-        fileId = msgReply.document.file_id;
-        tipoMidia = "📁 Tipo: DOCUMENT";
-    }
-    // 🎞️ RECONHECER GIF (ANIMATION)
-    else if (msgReply.animation) {
-        fileId = msgReply.animation.file_id;
-        tipoMidia = "🎞 Tipo: GIF";
-    }
+            if (msgReply.photo && msgReply.photo.length > 0) {
+                fileId = msgReply.photo[msgReply.photo.length - 1].file_id;
+                tipoMidia = "🖼 Tipo: FOTO";
+            }
+            else if (msgReply.video) {
+                fileId = msgReply.video.file_id;
+                tipoMidia = "📹 Tipo: VIDEO";
+            }
+            else if (msgReply.document) {
+                fileId = msgReply.document.file_id;
+                tipoMidia = "📁 Tipo: DOCUMENT";
+            }
+            else if (msgReply.animation) {
+                fileId = msgReply.animation.file_id;
+                tipoMidia = "🎞 Tipo: GIF";
+            }
 
-    // Se não for nenhuma mídia válida, para o fluxo
-    if (!fileId) {
-        await enviarMensagem("❌ Tipo de mídia não suportado.");
-        return new Response("OK", { status: 200 });
-    }
+            if (!fileId) {
+                await enviarMensagem("❌ Tipo de mídia não suportado.");
+                return new Response("OK", { status: 200 });
+            }
 
-    const textoResposta = `${tipoMidia}\n\n🆔 <b>FileID:</b>\n<code>${fileId}</code>`;
-    
-    // Configura o botão nativo do Telegram que copia o texto ao ser clicado
-    const tecladoCopiar = [
-        [{ 
-            text: "📋 Copiar FileID", 
-            copy_text: { text: fileId } 
-        }]
-    ];
+            const textoResposta = `${tipoMidia}\n\n🆔 <b>FileID:</b>\n<code>${fileId}</code>`;
+            
+            const tecladoCopiar = [
+                [{ 
+                    text: "📋 Copiar FileID", 
+                    copy_text: { text: fileId } 
+                }]
+            ];
 
-    // Dispara a mensagem com o botão de cópia rápida
-    let body = { 
-        chat_id: chatId, 
-        text: textoResposta, 
-        parse_mode: "HTML", 
-        reply_markup: { inline_keyboard: tecladoCopiar } 
-    };
-    
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { 
-        method: "POST", 
-        headers: { "Content-Type": "application/json" }, 
-        body: JSON.stringify(body) 
-    });
+            let body = { 
+                chat_id: chatId, 
+                text: textoResposta, 
+                parse_mode: "HTML", 
+                reply_markup: { inline_keyboard: tecladoCopiar } 
+            };
+            
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { 
+                method: "POST", 
+                headers: { "Content-Type": "application/json" }, 
+                body: JSON.stringify(body) 
+            });
 
-    return new Response("OK", { status: 200 });
-}
+            return new Response("OK", { status: 200 });
+        }
 
-                // ==========================================================
+        // ==========================================================
+        // 🔐 COMANDO ADMIN: /add_clone (Criar novo bot clone)
+        // ==========================================================
+        else if (texto.startsWith("/add_clone")) {
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Acesso negado ao clone. O seu ID atual é: <code>" + userId + "</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            const novoToken = texto.replace("/add_clone", "").trim();
+
+            if (!novoToken || !novoToken.includes(":")) {
+                await enviarMensagem("❌ <b>Token inválido.</b>\nEnvie o token exato que o @BotFather lhe deu.\nEx: <code>/add_clone 123456:AAEF...</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            const workerUrlBase = "https://lucky-bar-5077.futvert.workers.dev/bot/";
+            const webhookDoClone = workerUrlBase + novoToken;
+
+            try {
+                const respostaTg = await fetch(`https://api.telegram.org/bot${novoToken}/setWebhook?url=${webhookDoClone}`);
+                const resultadoTg = await respostaTg.json();
+
+                if (resultadoTg.ok) {
+                    await env.GOLS_FLAMENGO_KV.put(`clone_ativo_${novoToken}`, "true");
+                    await enviarMensagem("✅ <b>SISTEMA CLONADO COM SUCESSO!</b>\n\nO novo bot já está ligado à sua Cloudflare e tem as mesmas funcionalidades.");
+                } else {
+                    await enviarMensagem("❌ <b>Erro na clonagem (Telegram):</b> " + resultadoTg.description);
+                }
+            } catch (e) {
+                await enviarMensagem("❌ <b>Erro de servidor:</b> " + e.message);
+            }
+            return new Response("OK", { status: 200 });
+        }
+
+        // ==========================================================
         // ⚽ CAPTURAR PALPITES NOS COMENTÁRIOS E REAGIR COM 👍
         // ==========================================================
+        // 🚨 MUITO IMPORTANTE: Este bloco "else if (texto)" tem de ficar SEMPRE no final!
         else if (texto) {
-            // Verifica se o texto contém um placar válido (Ex: 2x1, 2 x 1, 2-1, 2 a 1, Flamengo 2x1 Vasco)
             const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
             
             if (regexPlacar.test(texto)) {
                 let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
                 
-                // O bot SÓ vai reagir se o bolão do jogo estiver aberto!
                 if (bolaoAberto === "true") {
                     let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
                     
-                    // Salva o palpite do usuário no banco de dados (para segurança/auditoria)
                     if (postId) {
                         await env.GOLS_FLAMENGO_KV.put("palpite_user_" + postId + "_" + userId, JSON.stringify({
                             palpite: texto.trim(),
@@ -881,7 +902,6 @@ if (texto.startsWith("/getid")) {
                         }));
                     }
 
-                    // 💥 MÁGICA DA REAÇÃO: Manda o Telegram botar o 👍 na mensagem do torcedor
                     try {
                         await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
                             method: "POST",
@@ -899,45 +919,6 @@ if (texto.startsWith("/getid")) {
                 }
             }
         }
-
-                // ==========================================================
-        // 🔐 COMANDO ADMIN: /add_clone (Criar novo bot clone)
-        // ==========================================================
-        else if (texto.startsWith("/add_clone")) {
-            // Trava de segurança para o seu ID
-            if (String(userId) !== "7717528550") {
-                return new Response("OK", { status: 200 });
-            }
-
-            const novoToken = texto.replace("/add_clone", "").trim();
-
-            if (!novoToken.includes(":")) {
-                await enviarMensagem("❌ <b>Token inválido.</b>\nEnvie o token exato que o @BotFather te deu.\nEx: <code>/add_clone 123456:AAEF...</code>");
-                return new Response("OK", { status: 200 });
-            }
-
-            // A URL base do seu Worker na Cloudflare
-            const workerUrlBase = "https://lucky-bar-5077.futvert.workers.dev/bot/";
-            
-            // Junta a URL do seu Worker com o Token do bot novo
-            const webhookDoClone = workerUrlBase + novoToken;
-
-            // Dispara a requisição para a API do Telegram ligar o bot novo no seu sistema
-            const respostaTg = await fetch(`https://api.telegram.org/bot${novoToken}/setWebhook?url=${webhookDoClone}`);
-            const resultadoTg = await respostaTg.json();
-
-            if (resultadoTg.ok) {
-                // Salva no banco de dados que esse clone existe
-                await env.GOLS_FLAMENGO_KV.put(`clone_ativo_${novoToken}`, "true");
-                await enviarMensagem("✅ <b>SISTEMA CLONADO COM SUCESSO!</b>\n\nO novo bot já está conectado à sua Cloudflare e rodando a mesma inteligência do Flamengo Gols.");
-            } else {
-                await enviarMensagem("❌ <b>Erro na clonagem:</b> " + resultadoTg.description);
-            }
-            return new Response("OK", { status: 200 });
-        }
-
-
-
 
         return new Response("OK", { status: 200 });
 
