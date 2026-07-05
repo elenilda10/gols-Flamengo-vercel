@@ -839,6 +839,49 @@ if (texto.startsWith("/getid")) {
     return new Response("OK", { status: 200 });
 }
 
+                // ==========================================================
+        // ⚽ CAPTURAR PALPITES NOS COMENTÁRIOS E REAGIR COM 👍
+        // ==========================================================
+        else if (texto) {
+            // Verifica se o texto contém um placar válido (Ex: 2x1, 2 x 1, 2-1, 2 a 1, Flamengo 2x1 Vasco)
+            const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
+            
+            if (regexPlacar.test(texto)) {
+                let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+                
+                // O bot SÓ vai reagir se o bolão do jogo estiver aberto!
+                if (bolaoAberto === "true") {
+                    let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+                    
+                    // Salva o palpite do usuário no banco de dados (para segurança/auditoria)
+                    if (postId) {
+                        await env.GOLS_FLAMENGO_KV.put("palpite_user_" + postId + "_" + userId, JSON.stringify({
+                            palpite: texto.trim(),
+                            nome: realName,
+                            hora: Date.now()
+                        }));
+                    }
+
+                    // 💥 MÁGICA DA REAÇÃO: Manda o Telegram botar o 👍 na mensagem do torcedor
+                    try {
+                        await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                chat_id: chatId,
+                                message_id: mensagem.message_id,
+                                reaction: [{ type: "emoji", emoji: "👍" }],
+                                is_big: false
+                            })
+                        });
+                    } catch (e) {
+                        console.log("Erro ao tentar reagir:", e.message);
+                    }
+                }
+            }
+        }
+
+
 
         return new Response("OK", { status: 200 });
 
