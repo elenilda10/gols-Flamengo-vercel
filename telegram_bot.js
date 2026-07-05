@@ -1,11 +1,30 @@
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    
+    // Extrai o token da URL (se for um clone chamando a rota /bot/TOKEN)
+    const tokenNaUrl = url.pathname.replace("/bot/", "").replace("/", "");
+    
+    // Se tiver um token válido na URL, usa ele. Se não, usa o token do bot principal.
+    const botTokenUsado = (tokenNaUrl && tokenNaUrl.includes(":")) ? tokenNaUrl : env.TELEGRAM_TOKEN;
+
+    // Passa o token escolhido para a função principal
+    return await processarMensagemTelegram(request, env, botTokenUsado);
+  }
+};
+
 // ==========================================================
-// 📥 FLUXO DO TELEGRAM (Gerenciado exclusivamente por este arquivo)
+// 📥 FLUXO DO TELEGRAM
 // ==========================================================
-export async function processarMensagemTelegram(request, env) {
-    const botToken = env.TELEGRAM_TOKEN; 
+// Adicione o parâmetro 'botTokenPassado' aqui na função
+export async function processarMensagemTelegram(request, env, botTokenPassado) {
+    // Usa o token que veio do roteador acima
+    const botToken = botTokenPassado || env.TELEGRAM_TOKEN; 
 
     try {
         const update = await request.json();
+        // ... (o resto do seu código continua igualzinho aqui para baixo)
+
         
         // ==========================================================
         // ⚡ MODO INLINE QUERY (Busca de Gols com Respeito ao Idioma Escolhido)
@@ -880,6 +899,43 @@ if (texto.startsWith("/getid")) {
                 }
             }
         }
+
+                // ==========================================================
+        // 🔐 COMANDO ADMIN: /add_clone (Criar novo bot clone)
+        // ==========================================================
+        else if (texto.startsWith("/add_clone")) {
+            // Trava de segurança para o seu ID
+            if (String(userId) !== "7717528550") {
+                return new Response("OK", { status: 200 });
+            }
+
+            const novoToken = texto.replace("/add_clone", "").trim();
+
+            if (!novoToken.includes(":")) {
+                await enviarMensagem("❌ <b>Token inválido.</b>\nEnvie o token exato que o @BotFather te deu.\nEx: <code>/add_clone 123456:AAEF...</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            // A URL base do seu Worker na Cloudflare
+            const workerUrlBase = "https://lucky-bar-5077.futvert.workers.dev/bot/";
+            
+            // Junta a URL do seu Worker com o Token do bot novo
+            const webhookDoClone = workerUrlBase + novoToken;
+
+            // Dispara a requisição para a API do Telegram ligar o bot novo no seu sistema
+            const respostaTg = await fetch(`https://api.telegram.org/bot${novoToken}/setWebhook?url=${webhookDoClone}`);
+            const resultadoTg = await respostaTg.json();
+
+            if (resultadoTg.ok) {
+                // Salva no banco de dados que esse clone existe
+                await env.GOLS_FLAMENGO_KV.put(`clone_ativo_${novoToken}`, "true");
+                await enviarMensagem("✅ <b>SISTEMA CLONADO COM SUCESSO!</b>\n\nO novo bot já está conectado à sua Cloudflare e rodando a mesma inteligência do Flamengo Gols.");
+            } else {
+                await enviarMensagem("❌ <b>Erro na clonagem:</b> " + resultadoTg.description);
+            }
+            return new Response("OK", { status: 200 });
+        }
+
 
 
 
