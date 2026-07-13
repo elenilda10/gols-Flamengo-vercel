@@ -504,8 +504,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        // ==========================================================
-        // 🔐 COMANDO ADMIN: /ganhou (Computar Pontos)
+                // ==========================================================
+        // 🔐 COMANDO ADMIN: /ganhou (Computar Pontos e Gerar Legenda)
         // ==========================================================
         else if (texto.startsWith("/ganhou")) {
             if (String(userId) !== "7717528550") {
@@ -547,17 +547,18 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let linkComentario = "https://t.me/c/" + cleanChatId + "/" + msgId;
             let novaEntrada = "🥇 " + perfilLink + " (<a href=\"" + linkComentario + "\">Ver Palpite</a>)";
 
-            let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
-            if (bolaoAberto !== "false") {
-                let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
-                let listaNova = listaAtual === "" ? novaEntrada : listaAtual + "\n" + novaEntrada;
-                await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
-            }
+            // 🚀 CORREÇÃO PRINCIPAL: A trava 'if (bolaoAberto !== "false")' foi removida daqui!
+            // Agora, mesmo com o bolão fechado após o jogo, ele SEMPRE salva o nome na legenda final:
+            let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+            let listaNova = listaAtual === "" ? novaEntrada : listaAtual + "\n" + novaEntrada;
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
 
+            // Salva no histórico de vencedores da postagem
             let historico = await env.GOLS_FLAMENGO_KV.get("historico_vencedores_" + postId) || "";
             let historicoAtualizado = historico === "" ? novaEntrada : historico + "\n" + novaEntrada;
             await env.GOLS_FLAMENGO_KV.put("historico_vencedores_" + postId, historicoAtualizado);
 
+            // Libera o ID do usuário para ele poder resgatar o ponto no botão da legenda final
             let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postId);
             let listaIds = winnersRaw ? JSON.parse(winnersRaw) : [];
             if (!listaIds.includes(String(vencedor.id))) {
@@ -565,16 +566,19 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             }
             await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + postId, JSON.stringify(listaIds));
 
+            // Soma +1 ponto no ranking global
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
             ranking[vencedor.id] = (ranking[vencedor.id] || 0) + 1;
             await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
 
+            // Atualiza o nome do torcedor para o ranking web
             let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
             let nomes = namesRaw ? JSON.parse(namesRaw) : {};
             nomes[vencedor.id] = nome;
             await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(nomes));
 
+            // Se já houver resultado oficial gravado, adiciona ao histórico individual do torcedor no site
             let resultado = await env.GOLS_FLAMENGO_KV.get("resultado_oficial_" + postId);
             let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Jogo";
 
@@ -586,6 +590,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 await env.GOLS_FLAMENGO_KV.put("acertos_" + vencedor.id, JSON.stringify(historicoUser));
             }
 
+            // Marca como correção manual se o bolão estiver fechado
+            let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
             if (bolaoAberto === "false") {
                 let corrigidosRaw = await env.GOLS_FLAMENGO_KV.get("corrigidos_manual_" + postId);
                 let corrigidos = corrigidosRaw ? JSON.parse(corrigidosRaw) : [];
@@ -593,14 +599,17 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 await env.GOLS_FLAMENGO_KV.put("corrigidos_manual_" + postId, JSON.stringify(corrigidos));
             }
 
+            // Manda a mensagem no grupo avisando que o torcedor pontuou
             await fetch("https://api.telegram.org/bot" + botToken + "/sendMessage", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ chat_id: update.message.chat.id, text: "🎯 <b>ACERTOU O PLACAR!</b>\n\nParabéns " + perfilLink + " 🏆\n➕ 1 ponto adicionado!", parse_mode: "HTML", reply_to_message_id: msgId })
             });
 
+            // Apaga o seu comando /ganhou para o grupo ficar limpo
             try { await fetch("https://api.telegram.org/bot" + botToken + "/deleteMessage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: update.message.chat.id, message_id: update.message.message_id }) }); } catch (e) {}
             return new Response("OK", { status: 200 });
         }
+
 
         // ==========================================================
         // 🔐 COMANDO ADMIN: /encerrar_bolao (Finalizar Rodada)
