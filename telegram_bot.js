@@ -170,7 +170,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         const editarMensagemEspecifica = async (msgId, textoResposta, teclado = null) => {
             let body = { chat_id: chatId, message_id: msgId, text: textoResposta, parse_mode: "HTML", disable_web_page_preview: true };
             if (teclado) body.reply_markup = { inline_keyboard: teclado };
-            await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            const res = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            return await res.json();
         };
 
         const editarMensagem = async (textoResposta, teclado = null) => {
@@ -492,7 +493,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let rawText = targetMsg.text || targetMsg.caption || "";
                 let entities = targetMsg.entities || targetMsg.caption_entities || null;
                 
-                // Converter entidades para HTML puro para preservar Emojis Premium
                 let htmlText = converterEntidadesParaHTML(rawText, entities);
 
                 let draft = {
@@ -850,37 +850,31 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 // 🛠 AUXILIARES E CONVERSORES DE MÍDIA / ANÚNCIOS
 // ==========================================================
 
-// Converte caracteres e insere tags <tg-emoji> de forma segura via UTF-16
 function converterEntidadesParaHTML(texto, entidades) {
     if (!texto) return "";
-    let textoEscapado = texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    if (!entidades || entidades.length === 0) return textoEscapado;
-
-    // Filtra apenas custom_emoji
-    let emojiEnts = entidades.filter(e => e.type === "custom_emoji" && e.custom_emoji_id);
-    if (emojiEnts.length === 0) return textoEscapado;
-
-    // Converte a string original em um array de UTF-16 code units para fateamento preciso
-    let codeUnits = Array.from(texto);
     
-    // Ordena do final para o início para não corromper índices dos offsets
-    emojiEnts.sort((a, b) => b.offset - a.offset);
-
-    let arrResultado = Array.from(textoEscapado);
-
-    for (let ent of emojiEnts) {
-        let sliceEmoji = codeUnits.slice(ent.offset, ent.offset + ent.length).join("");
-        let emojiEscapado = sliceEmoji.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        let tagHtml = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiEscapado}</tg-emoji>`;
-        
-        let antes = codeUnits.slice(0, ent.offset).join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        let depois = codeUnits.slice(ent.offset + ent.length).join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        
-        textoEscapado = antes + tagHtml + depois;
-        codeUnits = Array.from(codeUnits.slice(0, ent.offset).join("") + tagHtml + codeUnits.slice(ent.offset + ent.length).join(""));
+    // Se não há entidades custom_emoji, escapa e retorna
+    if (!entidades || entidades.length === 0) {
+        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
-    return textoEscapado;
+    let emojiEnts = entidades.filter(e => e.type === "custom_emoji" && e.custom_emoji_id);
+    if (emojiEnts.length === 0) {
+        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Processamento seguro baseado em array de caracteres estendidos
+    let chars = Array.from(texto);
+    emojiEnts.sort((a, b) => b.offset - a.offset);
+
+    for (let ent of emojiEnts) {
+        let sliceEmoji = chars.slice(ent.offset, ent.offset + ent.length).join("");
+        let emojiEscapado = sliceEmoji.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        let tagHtml = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiEscapado}</tg-emoji>`;
+        chars.splice(ent.offset, ent.length, tagHtml);
+    }
+
+    return chars.join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft) {
