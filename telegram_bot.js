@@ -21,7 +21,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         const update = await request.json();
 
         // ==========================================================
-        // ⚡ MODO INLINE QUERY (Permanecendo 100% Ativo)
+        // ⚡ MODO INLINE QUERY (Busca de Gols)
         // ==========================================================
         if (update.inline_query) {
             const inlineQuery = update.inline_query;
@@ -134,7 +134,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         // ==========================================================
         // 🔘 MODO MENSAGEM OU CALLBACK
         // ==========================================================
-        let mensagem, texto, chatId, userId, isCallback = false, callbackId;
+        let mensagem, texto, chatId, userId, userFirstName, userLastName, isCallback = false, callbackId;
 
         if (update.callback_query) {
             isCallback = true;
@@ -143,14 +143,22 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             texto = update.callback_query.data;
             chatId = mensagem.chat.id;
             userId = update.callback_query.from.id;
+            userFirstName = update.callback_query.from.first_name || "Torcedor";
+            userLastName = update.callback_query.from.last_name || "";
         } else if (update.message) {
             mensagem = update.message;
             texto = mensagem.text || mensagem.caption || "";
             chatId = mensagem.chat.id;
             userId = mensagem.from.id;
+            userFirstName = mensagem.from.first_name || "Torcedor"; 
+            userLastName = mensagem.from.last_name || "";   
         } else {
             return new Response("OK", { status: 200 });
         }
+
+        const realName = `${userFirstName} ${userLastName}`.trim();
+        const escHTML = (text) => String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const mention = `<a href="tg://user?id=${userId}">${escHTML(realName)}</a>`;
 
         const enviarMensagem = async (textoResposta, teclado = null) => {
             let body = { chat_id: chatId, text: textoResposta, parse_mode: "HTML", disable_web_page_preview: true };
@@ -184,26 +192,166 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
 
+        let savedLang = await env.GOLS_FLAMENGO_KV.get(`lang_${userId}`);
+        let userLangCode = savedLang || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
+        userLangCode = userLangCode.substring(0, 2).toLowerCase();
+        let lang = ["pt", "en", "es"].includes(userLangCode) ? userLangCode : "pt";
+
+        let userExiste = await env.GOLS_FLAMENGO_KV.get(`user_${userId}`);
+        if (!userExiste) {
+            await env.GOLS_FLAMENGO_KV.put(`user_${userId}`, "true");
+            let totalAtual = await env.GOLS_FLAMENGO_KV.get("TOTAL_USERS") || 0;
+            await env.GOLS_FLAMENGO_KV.put("TOTAL_USERS", String(Number(totalAtual) + 1));
+        }
+        let totalUsers = await env.GOLS_FLAMENGO_KV.get("TOTAL_USERS") || 1;
+
+        if (texto.startsWith("set_lang_")) {
+            lang = texto.replace("set_lang_", "");
+            await env.GOLS_FLAMENGO_KV.put(`lang_${userId}`, lang);
+            const avisos = { pt: "Idioma alterado! 🇧🇷", en: "Language changed! 🇺🇸", es: "¡Idioma cambiado! 🇪🇸" };
+            await responderCallback(avisos[lang]);
+            texto = "menu_principal";
+        }
+
+        if (texto === "change_lang") {
+            const txtIdioma = { pt: "🌐 Selecione o seu idioma:", en: "🌐 Select your language:", es: "🌐 Seleccione su idioma:" };
+            const tecladoIdioma = [
+                [{ text: "🇧🇷 Português", callback_data: "set_lang_pt" }],
+                [{ text: "🇺🇸 English", callback_data: "set_lang_en" }],
+                [{ text: "🇪🇸 Español", callback_data: "set_lang_es" }],
+                [{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]
+            ];
+            if (isCallback) await editarMensagem(txtIdioma[lang], tecladoIdioma);
+            return new Response("OK", { status: 200 });
+        }
+
+        if (texto === "suporte_bot") {
+            if (isCallback) await responderCallback();
+            const textosSuporte = {
+                pt: `🛠 <b>Suporte ao Usuário</b>\n\nPrecisa de ajuda ou encontrou algum problema?\n\n👉 Entre em contato diretamente com o nosso administrador clicando no botão abaixo ou envie uma mensagem para o suporte oficial.`,
+                en: `🛠 <b>User Support</b>\n\nNeed help or found a bug?\n\n👉 Contact our administrator directly by clicking the button below or send a message to the official support.`,
+                es: `🛠 <b>Soporte de Usuario</b>\n\n¿Necesitas ayuda o encontraste um error?\n\n👉 Contacta directamente com nuestro administrador haciendo clic en el botão de abajo o envía un mensaje al soporte oficial.`
+            };
+            const botoesSuporte = {
+                pt: { contato: "💬 Falar com Suporte", voltar: "🔙 Voltar" },
+                en: { contato: "💬 Contact Support", voltar: "🔙 Back" },
+                es: { contato: "💬 Contactar Soporte", voltar: "🔙 Volver" }
+            };
+            const btnSup = botoesSuporte[lang] || botoesSuporte.pt;
+            const tecladoSuporte = [
+                [{ text: btnSup.contato, url: "https://t.me/oedutg" }],
+                [{ text: btnSup.voltar, callback_data: "menu_principal" }]
+            ];
+            if (isCallback) await editarMensagem(textosSuporte[lang], tecladoSuporte);
+            else await enviarMensagem(textosSuporte[lang], tecladoSuporte);
+            return new Response("OK", { status: 200 });
+        }
+
         // ==========================================================
-        // 🔐 GERENCIADOR GUIADO DE ANÚNCIOS (/send)
+        // ⚡ COMANDOS PRINCIPAIS (/start, /ajuda)
         // ==========================================================
-        if (texto.startsWith("/send") || texto.startsWith("adv_")) {
-            if (String(userId) !== "7717528550") {
-                await enviarMensagem("❌ Acesso negado.");
+        if (texto.startsWith("/start") || texto === "menu_principal") {
+            if (isCallback && texto !== "menu_principal") await responderCallback();
+
+            if (texto.startsWith("/start resgatar_") && !texto.startsWith("/start resgatar_br_")) {
+                let params = texto.replace("/start", "").trim();
+                let postagemId = params.replace("resgatar_", "").trim();
+                let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postagemId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Partida não informada";
+                let resultadoOficial = await env.GOLS_FLAMENGO_KV.get("resultado_oficial_" + postagemId) || "Resultado ainda não informado";
+                let encerradoEm = await env.GOLS_FLAMENGO_KV.get("bolao_encerrado_em_" + postagemId) || 0;
+                
+                let umaHora = 60 * 60 * 1000;
+                let aindaEmRevisao = Date.now() - Number(encerradoEm) < umaHora;
+
+                let meuPalpiteRaw = await env.GOLS_FLAMENGO_KV.get("palpite_user_" + postagemId + "_" + userId);
+                let textoPalpite = "";
+                if (meuPalpiteRaw) {
+                    let meuPalpite = JSON.parse(meuPalpiteRaw);
+                    if (meuPalpite.palpite) textoPalpite = "\n📌 Seu palpite: <b>" + escHTML(meuPalpite.palpite) + "</b>";
+                }
+
+                let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postagemId);
+                let vencedoresIds = winnersRaw ? JSON.parse(winnersRaw) : [];
+                let ganhou = vencedoresIds.includes(String(userId));
+
+                let chaveResgateConcluido = "resgate_concluido_" + postagemId + "_" + userId;
+                let jaResgatou = await env.GOLS_FLAMENGO_KV.get(chaveResgateConcluido);
+
+                if (jaResgatou === "true") {
+                    await enviarMensagem("✅ " + mention + ", você já resgatou este ponto do Flamengo.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite);
+                    return new Response("OK", { status: 200 });
+                }
+
+                if (ganhou) {
+                    await env.GOLS_FLAMENGO_KV.put(chaveResgateConcluido, "true");
+                    let chaveAcertosTotal = "acertos_total_" + userId;
+                    let acertos = Number(await env.GOLS_FLAMENGO_KV.get(chaveAcertosTotal) || 0) + 1;
+                    await env.GOLS_FLAMENGO_KV.put(chaveAcertosTotal, String(acertos));
+                    let jaVerificou = await env.GOLS_FLAMENGO_KV.get("resgate_verificado_" + postagemId + "_" + userId);
+                    let textoExtra = jaVerificou === "true" ? "\n🛠 Seu acerto foi reconhecido após a conferência manual." : "";
+                    await enviarMensagem("🎯 " + mention + ", seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n✅ Status: <b>Você ganhou!</b>" + textoExtra + "\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>" + acertos + "</b>");
+                    return new Response("OK", { status: 200 });
+                }
+
+                await env.GOLS_FLAMENGO_KV.put("resgate_verificado_" + postagemId + "_" + userId, "true");
+                let textoRevisao = aindaEmRevisao ? "\n\n🕒 O resultado ainda está no período de revisão de 1 hora." : "";
+                await enviarMensagem("😔 " + mention + ", você não faturou este bolão.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n❌ Status: <b>Você perdeu.</b>" + textoRevisao);
                 return new Response("OK", { status: 200 });
             }
 
+            const textosMenu = {
+                pt: "👋 Olá " + realName + ", seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: " + totalUsers,
+                en: "👋 Hello " + realName + ", welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: " + totalUsers,
+                es: "👋 ¡Hola " + realName + ", bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: " + totalUsers
+            };
+
+            const botoesMenu = {
+                pt: { buscar: "Buscar Flamengo", livre: "Busca Livre", canal: "Canal Oficial", suporte: "Suporte 🛠", idioma: "Mudar Idioma" },
+                en: { buscar: "Search Flamengo", livre: "Free Search", canal: "Official Channel", suporte: "Support 🛠", idioma: "Change Language" },
+                es: { buscar: "Buscar Flamengo", livre: "Búsqueda Libre", canal: "Canal Oficial", suporte: "Soporte 🛠", idioma: "Cambiar Idioma" }
+            };
+            const btn = botoesMenu[lang] || botoesMenu.pt;
+
+            const tecladoMenu = [
+                [{ text: btn.buscar, switch_inline_query_current_chat: "Flamengo" }, { text: btn.livre, switch_inline_query_current_chat: "" }],
+                [{ text: btn.canal, url: "https://t.me/Flamengo77" }],
+                [{ text: btn.suporte, callback_data: "suporte_bot" }, { text: btn.idioma, callback_data: "change_lang" }]
+            ];
+
+            if (isCallback) await editarMensagem(textosMenu[lang], tecladoMenu);
+            else await enviarMensagem(textosMenu[lang], tecladoMenu);
+        }
+
+        else if (texto === "/ajuda" || texto === "/help" || texto === "/ayuda") {
+            const textosAjuda = {
+                pt: "🆘 <b>Central de Ajuda - Flamengo Gols Bot</b>\n\nBem-vindo ao bot oficial de gols do Flamengo! 🔴⚫\n\n🚀 <b>Como usar no modo inline</b>\nVocê pode buscar gols direto em qualquer chat, grupo ou conversa, sem precisar abrir o bot.\n\n<b>Passo a passo:</b>\n1️⃣ Vá para qualquer grupo\n2️⃣ Digite: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Escolha o resultado e envie! 🎥🔥",
+                en: "🆘 <b>Help Center - Flamengo Goals Bot</b>\n\nWelcome to the official Flamengo goals bot! 🔴⚫\n\n🚀 <b>How to use inline mode</b>\nSearch goals directly in any chat without opening the bot.\n\n<b>Step by step:</b>\n1️⃣ Go to any group\n2️⃣ Type: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Choose the result and send! 🎥🔥",
+                es: "🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de gols del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en qualquer chat sin abrir el bot.\n\n<b>Paso a passo:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥"
+            };
+            const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]];
+            await enviarMensagem(textosAjuda[lang], tecladoAjuda);
+        }
+
+        // ==========================================================
+        // 🔐 GERENCIADOR PRIVADO DE ANÚNCIOS (/send)
+        // ==========================================================
+        else if (texto.startsWith("/send") || texto.startsWith("adv_")) {
+            // Trava de ID do usuário autorizada
+            if (String(userId) !== "7717528550") {
+                await enviarMensagem("❌ Acesso negado. Comando restrito.");
+                return new Response("OK", { status: 200 });
+            }
+
+            // Iniciar o Processo
             if (texto.startsWith("/send")) {
                 if (update.message) await deletarMensagem(update.message.message_id);
 
                 let resMenu = await enviarMensagem(
-                    "📢 <b>NOVO ANÚNCIO / BANNER (Horário de Brasília)</b>\n\n" +
-                    "Por favor, envie o conteúdo da postagem agora.\n\n" +
-                    "<i>Suporta emojis premium via tag HTML! Ex:</i>\n" +
-                    "<code>&lt;tg-emoji emoji-id=\"ID_AQUI\"&gt;⭐&lt;/tg-emoji&gt;</code>\n\n" +
-                    "<b>Formatos:</b>\n" +
+                    "📢 <b>NOVA POSTAGEM / BANNER (Canal @Flamengo77)</b>\n\n" +
+                    "Por favor, envie a mídia ou o texto da postagem agora.\n\n" +
+                    "<b>Tipos suportados:</b>\n" +
                     "• Somente Texto\n" +
-                    "• Foto / Vídeo / GIF / Sticker com ou sem legenda",
+                    "• Imagem, Vídeo, GIF ou Sticker (com ou sem legenda)",
                     [[{ text: "❌ Cancelar", callback_data: "adv_cancel" }]]
                 );
 
@@ -224,11 +372,18 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
+            if (texto === "adv_skip_caption") {
+                await responderCallback();
+                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
+                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
+                return new Response("OK", { status: 200 });
+            }
+
             if (texto.startsWith("adv_layout_")) {
                 let layoutChoice = texto.replace("adv_layout_", "");
                 draft.layout = layoutChoice;
                 await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                await responderCallback(`Layout: ${layoutChoice} por linha.`);
+                await responderCallback(`Layout: ${layoutChoice} botão(ões) por linha.`);
                 await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
             }
 
@@ -244,7 +399,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_button");
                 await editarMensagemEspecifica(mainMsgId,
                     "🔘 <b>ADICIONAR BOTÃO INLINE</b>\n\n" +
-                    "Envie no chat no formato:\n\n" +
+                    "Envie no chat o texto do botão e a URL no formato:\n\n" +
                     "<code>Texto do Botão | https://link.com</code>",
                     [
                         [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
@@ -256,7 +411,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
             else if (texto === "adv_set_schedule") {
                 await responderCallback();
-                const txtSch = "⏰ <b>PROGRAMAÇÃO (Horário de Brasília UTC-3)</b>\n\nEscolha o tipo de agendamento:";
+                const txtSch = "⏰ <b>PROGRAMAÇÃO (Horário de Brasília)</b>\n\nEscolha a frequência de publicação:";
                 const kbSch = [
                     [{ text: "➡️ Envio Único Agendado", callback_data: "adv_mode_once" }],
                     [{ text: "🔄 Diariamente", callback_data: "adv_mode_daily" }],
@@ -279,7 +434,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
                 let instrucao = "";
                 if (mode === "once") {
-                    instrucao = "Informe o horário no padrão de Brasília (DD/MM/AAAA HH:MM).\n\n<code>DD/MM/AAAA HH:MM | DD/MM/AAAA HH:MM</code>\n\n<i>Exemplo: 15/08/2026 14:00 | 18/08/2026 18:00</i>\n(Envie apenas a 1ª data caso não deseje auto-remoção).";
+                    instrucao = "Informe o horário de publicação e remoção (Horário de Brasília):\n\n<code>DD/MM/AAAA HH:MM | DD/MM/AAAA HH:MM</code>\n\n<i>Exemplo: 15/08/2026 14:00 | 18/08/2026 18:00</i>\n(Envie apenas a 1ª data caso não queira auto-remoção).";
                 } else if (mode === "daily") {
                     instrucao = "Informe o horário de Brasília e a data limite final:\n\n<code>HH:MM | DD/MM/AAAA</code>\n\n<i>Exemplo: 10:00 | 31/12/2026</i>";
                 } else if (mode === "weekly") {
@@ -325,13 +480,14 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // 🔐 INTERCEPTAÇÃO E CAPTURA GUIADA
+        // 🔐 CAPTURA E PROCESSAMENTO DAS RESPOSTAS DO ADMIN
         // ==========================================================
         let adminState = await env.GOLS_FLAMENGO_KV.get(`adv_state_${userId}`);
         if (adminState && String(userId) === "7717528550" && update.message) {
             let userMsgId = update.message.message_id;
             let mainMsgId = await env.GOLS_FLAMENGO_KV.get(`adv_main_msg_${userId}`);
 
+            // Estágio 1: Recebe o conteúdo do Anúncio
             if (adminState === "waiting_content") {
                 await deletarMensagem(userMsgId);
 
@@ -339,6 +495,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let draft = {
                     type: targetMsg.photo ? "photo" : targetMsg.video ? "video" : targetMsg.animation ? "animation" : targetMsg.sticker ? "sticker" : "text",
                     text: targetMsg.text || targetMsg.caption || "",
+                    entities: targetMsg.entities || targetMsg.caption_entities || null,
                     file_id: targetMsg.photo ? targetMsg.photo[targetMsg.photo.length - 1].file_id : targetMsg.video?.file_id || targetMsg.animation?.file_id || targetMsg.sticker?.file_id || null,
                     buttons: [],
                     layout: "1",
@@ -347,6 +504,39 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 };
 
                 await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
+
+                // Se enviou apenas uma mídia sem legenda/texto, pergunta se quer enviar legenda ou pular
+                if (draft.type !== "text" && !draft.text) {
+                    await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_caption_input");
+                    await editarMensagemEspecifica(mainMsgId,
+                        "📝 <b>ADICIONAR LEGENDA</b>\n\n" +
+                        "Você enviou uma mídia sem legenda. Deseja enviar um texto/legenda para acompanha-la?\n\n" +
+                        "<i>Envie o texto desejado no chat ou clique em Pular.</i>",
+                        [
+                            [{ text: "➡️ Pular Legenda", callback_data: "adv_skip_caption" }],
+                            [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
+                        ]
+                    );
+                    return new Response("OK", { status: 200 });
+                }
+
+                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
+                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
+                return new Response("OK", { status: 200 });
+            }
+
+            // Estágio 1.5: Captura opcional de Legenda caso não tenha enviado junto com a mídia
+            if (adminState === "waiting_caption_input") {
+                await deletarMensagem(userMsgId);
+                let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
+                let draft = rawDraft ? JSON.parse(rawDraft) : null;
+
+                if (draft) {
+                    draft.text = update.message.text || "";
+                    draft.entities = update.message.entities || null;
+                    await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
+                }
+
                 await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
                 await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
                 return new Response("OK", { status: 200 });
@@ -355,6 +545,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
             let draft = rawDraft ? JSON.parse(rawDraft) : null;
 
+            // Estágio 2: Adicionar Botões Inline
             if (adminState === "waiting_button" && draft) {
                 await deletarMensagem(userMsgId);
                 if (texto.includes("|")) {
@@ -375,6 +566,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
+            // Estágio 3: Agendamento com fuso horário de Brasília
             if (adminState === "waiting_schedule_times" && draft) {
                 await deletarMensagem(userMsgId);
                 let p = texto.split("|").map(s => s.trim());
@@ -404,7 +596,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     await env.GOLS_FLAMENGO_KV.delete(`adv_draft_${userId}`);
                     await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
 
-                    await editarMensagemEspecifica(mainMsgId, "✅ <b>ANÚNCIO PROGRAMADO COM SUCESSO!</b>\n\nHorário sincronizado com o fuso de Brasília (UTC-3).");
+                    await editarMensagemEspecifica(mainMsgId, "✅ <b>ANÚNCIO PROGRAMADO COM SUCESSO!</b>\n\nHorário configurado com fuso oficial de Brasília (UTC-3).");
                 } catch (e) {
                     await editarMensagemEspecifica(mainMsgId, 
                         "❌ <b>Erro na Data/Hora:</b> " + e.message, 
@@ -415,6 +607,211 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     );
                 }
                 return new Response("OK", { status: 200 });
+            }
+        }
+
+        // ==========================================================
+        // 🔐 DEMAIS COMANDOS DE ADMINISTRAÇÃO E BOLÃO
+        // ==========================================================
+        else if (texto.startsWith("/iniciar_bolao")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+            const params = texto.replace(/^\/iniciar_bolao\s*/, "").trim();
+            let input = params.split("|");
+            if (input.length < 2) {
+                await enviarMensagem("❌ <b>Formato incorreto!</b> Use: <code>/iniciar_bolao Flamengo x Vasco 21h | ID_DA_FOTO</code>");
+                return new Response("OK", { status: 200 });
+            }
+
+            const formatarTimes = (txt) => txt.toLowerCase().replace(/\b\w/g, (l) => l.toUpperCase());
+            let infoJogo = formatarTimes(input[0].trim());
+            let fotoId = input[1].trim();
+
+            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+            await env.GOLS_FLAMENGO_KV.delete("BOLAO_RESGATE_ID");
+
+            let confrontoLimpo = infoJogo.replace(/\d{1,2}H\d{0,2}/gi, "").replace(/\d{1,2}:\d{2}/g, "").trim();
+            let partesTimes = confrontoLimpo.split(/\s+x\s+/i);
+            let timeCasa = partesTimes[0] ? partesTimes[0].trim() : "Time 1";
+            let timeFora = partesTimes[1] ? partesTimes[1].trim() : "Time 2";
+
+            let textoLegenda =
+                "🏟 <b>BOLÃO DO MENGÃO</b> 🔴⚫\n\n" +
+                "🔥 <b>PARTIDA:</b>\n<b>" + infoJogo + "</b>\n\n" +
+                "💬 <b>COMO PARTICIPAR:</b>\nClique em <b>“Escrever um comentário”</b> e envie seu palpite.\n\n" +
+                "<blockquote expandable>" +
+                "📌 <b>LEIA ANTES DE PALPITAR</b>\n\n" +
+                "O placar deve seguir exatamente a ordem da partida:\n<b>" + timeCasa + " X " + timeFora + "</b>\n\n" +
+                "Exemplos:\n• <b>2x1</b>\n• <b>1x1</b>\n\n" +
+                "⚠️ <b>REGRAS:</b> Apenas 1 palpite por usuário. Editou perde a validação. Palpites após o início não contam." +
+                "</blockquote>\n\n" +
+                "🏆 Vale <b>1 ponto</b> no ranking!";
+
+            await env.GOLS_FLAMENGO_KV.put("confronto_atual", infoJogo);
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+
+            const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: "@Flamengo77", photo: fotoId, caption: textoLegenda, parse_mode: "HTML" })
+            });
+
+            const dadosPostagem = await respostaCanal.json();
+            if (dadosPostagem.ok) {
+                const canalMessageId = dadosPostagem.result.message_id;
+                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", String(canalMessageId));
+            }
+
+            await enviarMensagem("✅ <b>Bolão iniciado com sucesso!</b>");
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto.startsWith("/fechar_bolao")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+            await enviarMensagem("⛔ <b>Bolão fechado!</b>");
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto.startsWith("/ganhou")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+            if (!update.message || !update.message.reply_to_message) {
+                await enviarMensagem("❌ Responda ao palpite vencedor.");
+                return new Response("OK", { status: 200 });
+            }
+
+            const replyTo = update.message.reply_to_message;
+            const vencedor = replyTo.from;
+            const msgId = replyTo.message_id;
+            let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || await env.GOLS_FLAMENGO_KV.get("BOLAO_RESGATE_ID");
+
+            if (!postId) {
+                await enviarMensagem("❌ Nenhum bolão ativo encontrado.");
+                return new Response("OK", { status: 200 });
+            }
+
+            let nome = vencedor.first_name || "Usuário";
+            let perfilLink = `<a href="tg://user?id=${vencedor.id}">${nome}</a>`;
+            let novaEntrada = `🥇 ${perfilLink}`;
+
+            let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+            let listaNova = listaAtual === "" ? novaEntrada : listaAtual + "\n" + novaEntrada;
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
+
+            let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postId);
+            let listaIds = winnersRaw ? JSON.parse(winnersRaw) : [];
+            if (!listaIds.includes(String(vencedor.id))) listaIds.push(String(vencedor.id));
+            await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + postId, JSON.stringify(listaIds));
+
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            ranking[vencedor.id] = (ranking[vencedor.id] || 0) + 1;
+            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
+
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: update.message.chat.id, text: `🎯 <b>ACERTOU O PLACAR!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado!`, parse_mode: "HTML", reply_to_message_id: msgId })
+            });
+
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto.startsWith("/encerrar_bolao")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+            let input = texto.replace("/encerrar_bolao", "").split("|");
+            let placar = input[0]?.trim();
+            let fotoResultadoId = input[1]?.trim();
+
+            let msgIdOriginal = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+            if (!msgIdOriginal) return new Response("OK", { status: 200 });
+
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Jogo";
+            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+
+            await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+
+            let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${confronto}</b>\n📊 Resultado: <b>${placar}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
+            let tecladoResgate = [[{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]];
+
+            await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: "@Flamengo77", photo: fotoResultadoId, caption: legendaResultado, reply_to_message_id: Number(msgIdOriginal), parse_mode: "HTML", reply_markup: { inline_keyboard: tecladoResgate } })
+            });
+
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+
+            await enviarMensagem("✅ <b>Bolão encerrado com sucesso!</b>");
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto === "/ranking") {
+            if (isCallback) await responderCallback();
+
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
+
+            let rankingArray = Object.keys(ranking).map(id => ({ id: id, nome: nomes[id] || "Torcedor", pontos: Number(ranking[id]) || 0 }));
+            rankingArray.sort((a, b) => b.pontos - a.pontos);
+
+            let mensagemRanking = "🏆 <b>RANKING DO BOLÃO</b> 🏆\n\n";
+            for (let i = 0; i < rankingArray.length; i++) {
+                let pos = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "👤";
+                mensagemRanking += `${pos} ${rankingArray[i].nome} — <b>${rankingArray[i].pontos} pts</b>\n`;
+            }
+
+            const tecladoRanking = [[{ text: "🔄 Atualizar", callback_data: "/ranking" }]];
+
+            if (isCallback) await editarMensagem(mensagemRanking, tecladoRanking);
+            else await enviarMensagem(mensagemRanking, tecladoRanking);
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto.startsWith("/addgoal")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+            const tecladoWebApp = [
+                [{ text: "➕ Adicionar / Editar Gol", web_app: { url: "https://lucky-bar-5077.futvert.workers.dev/api/painel-addgoal" } }],
+                [{ text: "📋 Ver / Buscar na Lista Completa", web_app: { url: "https://lucky-bar-5077.futvert.workers.dev/api/lista-gols" } }]
+            ];
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, text: "⚙️ <b>PAINEL ADMINISTRATIVO DE GOLS</b>", parse_mode: "HTML", reply_markup: { inline_keyboard: tecladoWebApp } }) });
+            return new Response("OK", { status: 200 });
+        }
+
+        else if (texto.startsWith("/getid")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+            if (!update.message?.reply_to_message) return new Response("OK", { status: 200 });
+
+            const msgReply = update.message.reply_to_message;
+            let fileId = msgReply.photo ? msgReply.photo[msgReply.photo.length - 1].file_id : msgReply.video?.file_id || msgReply.document?.file_id || msgReply.animation?.file_id || "";
+            
+            await enviarMensagem(`🆔 <b>FileID:</b>\n<code>${fileId}</code>`);
+            return new Response("OK", { status: 200 });
+        }
+
+        // ==========================================================
+        // ⚽ CAPTURAR PALPITES NOS COMENTÁRIOS E REAGIR COM 👍
+        // ==========================================================
+        else if (texto) {
+            const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
+            if (regexPlacar.test(texto)) {
+                let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+                if (bolaoAberto === "true") {
+                    let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+                    if (postId) {
+                        await env.GOLS_FLAMENGO_KV.put("palpite_user_" + postId + "_" + userId, JSON.stringify({ palpite: texto.trim(), nome: realName, hora: Date.now() }));
+                    }
+                    try {
+                        await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                            method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id, reaction: [{ type: "emoji", emoji: "👍" }], is_big: false })
+                        });
+                    } catch (e) {}
+                }
             }
         }
 
@@ -457,6 +854,7 @@ async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId,
     await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+// Dispara o post no canal preservando todas as entidades (Emojis Premium nativos)
 async function dispararAnuncioNoCanal(env, botToken, draft) {
     const canal = "@Flamengo77";
     let inline_keyboard = [];
@@ -471,16 +869,32 @@ async function dispararAnuncioNoCanal(env, botToken, draft) {
 
     let payload = {
         chat_id: canal,
-        parse_mode: "HTML",
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
     };
 
     let endpoint = "sendMessage";
-    if (draft.type === "photo") { endpoint = "sendPhoto"; payload.photo = draft.file_id; payload.caption = draft.text; }
-    else if (draft.type === "video") { endpoint = "sendVideo"; payload.video = draft.file_id; payload.caption = draft.text; }
-    else if (draft.type === "animation") { endpoint = "sendAnimation"; payload.animation = draft.file_id; payload.caption = draft.text; }
-    else if (draft.type === "sticker") { endpoint = "sendSticker"; payload.sticker = draft.file_id; }
-    else { payload.text = draft.text; }
+    if (draft.type === "photo") {
+        endpoint = "sendPhoto";
+        payload.photo = draft.file_id;
+        payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
+    } else if (draft.type === "video") {
+        endpoint = "sendVideo";
+        payload.video = draft.file_id;
+        payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
+    } else if (draft.type === "animation") {
+        endpoint = "sendAnimation";
+        payload.animation = draft.file_id;
+        payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
+    } else if (draft.type === "sticker") {
+        endpoint = "sendSticker";
+        payload.sticker = draft.file_id;
+    } else {
+        payload.text = draft.text;
+        if (draft.entities) payload.entities = draft.entities;
+    }
 
     const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -537,13 +951,11 @@ async function processarAgendamentosAnuncios(env) {
     await env.GOLS_FLAMENGO_KV.put("ANUNCIOS_AGENDADOS", JSON.stringify(atualizados));
 }
 
-// Converte a string inserida considerando o Fuso Horário de Brasília (UTC-3)
 function parseDateStringToTimestampBrasilia(str) {
     let [data, hora] = str.trim().split(" ");
     let [dia, mes, ano] = data.split("/");
     let [h, m] = hora ? hora.split(":") : ["00", "00"];
     
-    // ISO String formatada explicitamente no offset -03:00 de Brasília
     let isoFormatted = `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}T${h.padStart(2, '0')}:${m.padStart(2, '0')}:00-03:00`;
     return new Date(isoFormatted).getTime();
 }
