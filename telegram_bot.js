@@ -4,7 +4,7 @@ export default {
   },
 
   // ==========================================================
-  // ⏰ CRON TRIGGER: Executa tarefas agendadas (Postar e Deletar Anúncios)
+  // ⏰ CRON TRIGGER: Executa tarefas agendadas
   // ==========================================================
   async scheduled(event, env, ctx) {
     ctx.waitUntil(processarAgendamentosAnuncios(env));
@@ -492,12 +492,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let targetMsg = update.message;
                 let rawText = targetMsg.text || targetMsg.caption || "";
                 let entities = targetMsg.entities || targetMsg.caption_entities || null;
-                
-                let htmlText = converterEntidadesParaHTML(rawText, entities);
 
                 let draft = {
                     type: targetMsg.photo ? "photo" : targetMsg.video ? "video" : targetMsg.animation ? "animation" : targetMsg.sticker ? "sticker" : "text",
-                    text: htmlText,
+                    text: rawText,
+                    entities: entities, // Armazena a estrutura nativa de entidades
                     file_id: targetMsg.photo ? targetMsg.photo[targetMsg.photo.length - 1].file_id : targetMsg.video?.file_id || targetMsg.animation?.file_id || targetMsg.sticker?.file_id || null,
                     button_rows: [],
                     pin: false,
@@ -532,9 +531,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let draft = rawDraft ? JSON.parse(rawDraft) : null;
 
                 if (draft) {
-                    let rawText = update.message.text || update.message.caption || "";
-                    let entities = update.message.entities || update.message.caption_entities || null;
-                    draft.text = converterEntidadesParaHTML(rawText, entities);
+                    draft.text = update.message.text || update.message.caption || "";
+                    draft.entities = update.message.entities || update.message.caption_entities || null;
                     await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
                 }
 
@@ -847,35 +845,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 }
 
 // ==========================================================
-// 🛠 AUXILIARES E CONVERSORES DE MÍDIA / ANÚNCIOS
+// 🛠 AUXILIARES DO PAINEL DE ANÚNCIOS
 // ==========================================================
-
-function converterEntidadesParaHTML(texto, entidades) {
-    if (!texto) return "";
-    
-    // Se não há entidades custom_emoji, escapa e retorna
-    if (!entidades || entidades.length === 0) {
-        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    let emojiEnts = entidades.filter(e => e.type === "custom_emoji" && e.custom_emoji_id);
-    if (emojiEnts.length === 0) {
-        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    // Processamento seguro baseado em array de caracteres estendidos
-    let chars = Array.from(texto);
-    emojiEnts.sort((a, b) => b.offset - a.offset);
-
-    for (let ent of emojiEnts) {
-        let sliceEmoji = chars.slice(ent.offset, ent.offset + ent.length).join("");
-        let emojiEscapado = sliceEmoji.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        let tagHtml = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiEscapado}</tg-emoji>`;
-        chars.splice(ent.offset, ent.length, tagHtml);
-    }
-
-    return chars.join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft) {
     let totalBotoes = draft.button_rows ? draft.button_rows.reduce((acc, row) => acc + row.length, 0) : 0;
@@ -900,13 +871,13 @@ async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId,
     await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+// Envia a mensagem nativamente com repasse direto de entities (Emojis Premium)
 async function dispararAnuncioNoCanal(env, botToken, draft) {
     const canal = "@Flamengo77";
     let inline_keyboard = draft.button_rows || [];
 
     let payload = {
         chat_id: canal,
-        parse_mode: "HTML",
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
     };
 
@@ -915,19 +886,23 @@ async function dispararAnuncioNoCanal(env, botToken, draft) {
         endpoint = "sendPhoto";
         payload.photo = draft.file_id;
         payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "video") {
         endpoint = "sendVideo";
         payload.video = draft.file_id;
         payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "animation") {
         endpoint = "sendAnimation";
         payload.animation = draft.file_id;
         payload.caption = draft.text;
+        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "sticker") {
         endpoint = "sendSticker";
         payload.sticker = draft.file_id;
     } else {
         payload.text = draft.text;
+        if (draft.entities) payload.entities = draft.entities;
     }
 
     const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
