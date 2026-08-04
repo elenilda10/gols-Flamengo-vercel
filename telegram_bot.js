@@ -336,13 +336,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         // 🔐 GERENCIADOR PRIVADO DE ANÚNCIOS (/send)
         // ==========================================================
         else if (texto.startsWith("/send") || texto.startsWith("adv_")) {
-            // Trava de ID do usuário autorizada
             if (String(userId) !== "7717528550") {
-                await enviarMensagem("❌ Acesso negado. Comando restrito.");
+                await enviarMensagem("❌ Acesso negado. Comando restrito ao administrador.");
                 return new Response("OK", { status: 200 });
             }
 
-            // Iniciar o Processo
             if (texto.startsWith("/send")) {
                 if (update.message) await deletarMensagem(update.message.message_id);
 
@@ -379,14 +377,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
-            if (texto.startsWith("adv_layout_")) {
-                let layoutChoice = texto.replace("adv_layout_", "");
-                draft.layout = layoutChoice;
-                await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                await responderCallback(`Layout: ${layoutChoice} botão(ões) por linha.`);
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-            }
-
             else if (texto === "adv_toggle_pin") {
                 draft.pin = !draft.pin;
                 await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
@@ -398,9 +388,16 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 await responderCallback();
                 await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_button");
                 await editarMensagemEspecifica(mainMsgId,
-                    "🔘 <b>ADICIONAR BOTÃO INLINE</b>\n\n" +
-                    "Envie no chat o texto do botão e a URL no formato:\n\n" +
-                    "<code>Texto do Botão | https://link.com</code>",
+                    "🔘 <b>ADICIONAR BOTÕES INLINE</b>\n\n" +
+                    "Envie os botões no chat escolhendo uma das opções de formato abaixo:\n\n" +
+                    "1️⃣ <b>1 botão por linha:</b>\n" +
+                    "<code>Texto | https://link.com</code>\n\n" +
+                    "2️⃣ <b>2 botões lado a lado:</b>\n" +
+                    "<code>Texto 1 | https://link1.com + Texto 2 | https://link2.com</code>\n\n" +
+                    "3️⃣ <b>3 botões lado a lado:</b>\n" +
+                    "<code>Texto 1 | link1.com + Texto 2 | link2.com + Texto 3 | link3.com</code>\n\n" +
+                    "4️⃣ <b>Várias linhas de uma vez:</b>\n" +
+                    "Envie cada linha de botões em uma nova linha de mensagem!",
                     [
                         [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
                         [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
@@ -487,25 +484,28 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let userMsgId = update.message.message_id;
             let mainMsgId = await env.GOLS_FLAMENGO_KV.get(`adv_main_msg_${userId}`);
 
-            // Estágio 1: Recebe o conteúdo do Anúncio
+            // Estágio 1: Receber Mídia/Texto
             if (adminState === "waiting_content") {
                 await deletarMensagem(userMsgId);
 
                 let targetMsg = update.message;
+                let rawText = targetMsg.text || targetMsg.caption || "";
+                let entities = targetMsg.entities || targetMsg.caption_entities || null;
+                
+                // Converter entidades para HTML puro para preservar Emojis Premium
+                let htmlText = converterEntidadesParaHTML(rawText, entities);
+
                 let draft = {
                     type: targetMsg.photo ? "photo" : targetMsg.video ? "video" : targetMsg.animation ? "animation" : targetMsg.sticker ? "sticker" : "text",
-                    text: targetMsg.text || targetMsg.caption || "",
-                    entities: targetMsg.entities || targetMsg.caption_entities || null,
+                    text: htmlText,
                     file_id: targetMsg.photo ? targetMsg.photo[targetMsg.photo.length - 1].file_id : targetMsg.video?.file_id || targetMsg.animation?.file_id || targetMsg.sticker?.file_id || null,
-                    buttons: [],
-                    layout: "1",
+                    button_rows: [], // Estrutura em matriz
                     pin: false,
                     recurrence: "IMEDIATO"
                 };
 
                 await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
 
-                // Se enviou apenas uma mídia sem legenda/texto, pergunta se quer enviar legenda ou pular
                 if (draft.type !== "text" && !draft.text) {
                     await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_caption_input");
                     await editarMensagemEspecifica(mainMsgId,
@@ -525,15 +525,16 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
-            // Estágio 1.5: Captura opcional de Legenda caso não tenha enviado junto com a mídia
+            // Estágio 1.5: Captura opcional de legenda
             if (adminState === "waiting_caption_input") {
                 await deletarMensagem(userMsgId);
                 let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
                 let draft = rawDraft ? JSON.parse(rawDraft) : null;
 
                 if (draft) {
-                    draft.text = update.message.text || "";
-                    draft.entities = update.message.entities || null;
+                    let rawText = update.message.text || "";
+                    let entities = update.message.entities || null;
+                    draft.text = converterEntidadesParaHTML(rawText, entities);
                     await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
                 }
 
@@ -545,18 +546,40 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
             let draft = rawDraft ? JSON.parse(rawDraft) : null;
 
-            // Estágio 2: Adicionar Botões Inline
+            // Estágio 2: Processar linhas e botões informados no formato flexível
             if (adminState === "waiting_button" && draft) {
                 await deletarMensagem(userMsgId);
-                if (texto.includes("|")) {
-                    let partes = texto.split("|");
-                    draft.buttons.push({ text: partes[0].trim(), url: partes[1].trim() });
+
+                let textoEntrada = update.message.text || "";
+                let linhas = textoEntrada.split("\n").map(l => l.trim()).filter(Boolean);
+                let novasLinhas = [];
+
+                for (let linha of linhas) {
+                    let botoesNaLinha = linha.split("+").map(b => b.trim()).filter(Boolean);
+                    let row = [];
+
+                    for (let btnStr of botoesNaLinha) {
+                        if (btnStr.includes("|")) {
+                            let partes = btnStr.split("|");
+                            row.push({ text: partes[0].trim(), url: partes[1].trim() });
+                        }
+                    }
+
+                    if (row.length > 0) {
+                        novasLinhas.push(row);
+                    }
+                }
+
+                if (novasLinhas.length > 0) {
+                    if (!draft.button_rows) draft.button_rows = [];
+                    draft.button_rows = draft.button_rows.concat(novasLinhas);
+
                     await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
                     await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
                     await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
                 } else {
                     await editarMensagemEspecifica(mainMsgId, 
-                        "❌ <b>Formato Inválido!</b>\n\nEnvie no formato:\n<code>Texto do Botão | https://link.com</code>", 
+                        "❌ <b>Formato Inválido!</b>\n\nEnvie no formato ex:\n<code>Texto | https://link.com</code>\nou\n<code>Texto 1 | link1.com + Texto 2 | link2.com</code>", 
                         [
                             [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
                             [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
@@ -824,26 +847,47 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 }
 
 // ==========================================================
-// 🛠 AUXILIARES DO GERENCIADOR DE ANÚNCIOS
+// 🛠 AUXILIARES E CONVERSORES DE MÍDIA / ANÚNCIOS
 // ==========================================================
 
+// Converte texto simples + entidades do Telegram em HTML com a tag <tg-emoji>
+function converterEntidadesParaHTML(texto, entidades) {
+    if (!texto) return "";
+    if (!entidades || entidades.length === 0) {
+        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Ordenar entidades da última para a primeira para não afetar os índices de offset
+    let entSorted = [...entidades].sort((a, b) => b.offset - a.offset);
+    let resultado = texto;
+
+    for (let ent of entSorted) {
+        if (ent.type === "custom_emoji" && ent.custom_emoji_id) {
+            let inicio = ent.offset;
+            let fim = ent.offset + ent.length;
+            let emojiOriginal = resultado.substring(inicio, fim);
+            let tagTag = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiOriginal}</tg-emoji>`;
+            
+            resultado = resultado.substring(0, inicio) + tagTag + resultado.substring(fim);
+        }
+    }
+
+    return resultado;
+}
+
 async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft) {
+    let totalBotoes = draft.button_rows ? draft.button_rows.reduce((acc, row) => acc + row.length, 0) : 0;
+
     const txtInfo = `⚙️ <b>PAINEL DO ANÚNCIO / BANNER</b>\n\n` +
                     `📱 <b>Tipo de Mídia:</b> ${draft.type.toUpperCase()}\n` +
                     `📝 <b>Legenda/Texto:</b> ${draft.text ? `<i>"${draft.text.substring(0, 40)}..."</i>` : "Nenhum"}\n` +
-                    `🔘 <b>Botões Adicionados:</b> ${draft.buttons.length}\n` +
-                    `📐 <b>Layout Selecionado:</b> ${draft.layout} botão(ões) por linha\n` +
+                    `🔘 <b>Botões Adicionados:</b> ${totalBotoes}\n` +
                     `📌 <b>Fixar no Canal:</b> ${draft.pin ? "SIM" : "NÃO"}\n` +
                     `⏰ <b>Programação:</b> ${draft.recurrence.toUpperCase()}\n\n` +
                     `Escolha abaixo para ajustar as configurações:`;
 
     const keyboard = [
         [{ text: "➕ Adicionar Botão URL", callback_data: "adv_add_btn" }],
-        [
-            { text: draft.layout === "1" ? "✅ 1 p/ Linha" : "1 p/ Linha", callback_data: "adv_layout_1" },
-            { text: draft.layout === "2" ? "✅ 2 p/ Linha" : "2 p/ Linha", callback_data: "adv_layout_2" },
-            { text: draft.layout === "3" ? "✅ 3 p/ Linha" : "3 p/ Linha", callback_data: "adv_layout_3" }
-        ],
         [{ text: draft.pin ? "📌 Desafixar Mensagem" : "📌 Fixar Mensagem", callback_data: "adv_toggle_pin" }],
         [{ text: "⏰ Definir Agendamento / Programação", callback_data: "adv_set_schedule" }],
         [{ text: "🚀 ENVIAR AGORA", callback_data: "adv_send_now" }],
@@ -854,21 +898,14 @@ async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId,
     await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-// Dispara o post no canal preservando todas as entidades (Emojis Premium nativos)
+// Dispara a postagem para o canal @Flamengo77 renderizando Emojis Premium e Botões
 async function dispararAnuncioNoCanal(env, botToken, draft) {
     const canal = "@Flamengo77";
-    let inline_keyboard = [];
-
-    if (draft.buttons && draft.buttons.length > 0) {
-        let perRow = parseInt(draft.layout || "1");
-        for (let i = 0; i < draft.buttons.length; i += perRow) {
-            let row = draft.buttons.slice(i, i + perRow).map(b => ({ text: b.text, url: b.url }));
-            inline_keyboard.push(row);
-        }
-    }
+    let inline_keyboard = draft.button_rows || [];
 
     let payload = {
         chat_id: canal,
+        parse_mode: "HTML", // Garante renderização das tags de Emoji Premium <tg-emoji>
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
     };
 
@@ -877,23 +914,19 @@ async function dispararAnuncioNoCanal(env, botToken, draft) {
         endpoint = "sendPhoto";
         payload.photo = draft.file_id;
         payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "video") {
         endpoint = "sendVideo";
         payload.video = draft.file_id;
         payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "animation") {
         endpoint = "sendAnimation";
         payload.animation = draft.file_id;
         payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
     } else if (draft.type === "sticker") {
         endpoint = "sendSticker";
         payload.sticker = draft.file_id;
     } else {
         payload.text = draft.text;
-        if (draft.entities) payload.entities = draft.entities;
     }
 
     const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
