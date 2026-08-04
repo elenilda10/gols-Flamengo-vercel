@@ -499,7 +499,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     type: targetMsg.photo ? "photo" : targetMsg.video ? "video" : targetMsg.animation ? "animation" : targetMsg.sticker ? "sticker" : "text",
                     text: htmlText,
                     file_id: targetMsg.photo ? targetMsg.photo[targetMsg.photo.length - 1].file_id : targetMsg.video?.file_id || targetMsg.animation?.file_id || targetMsg.sticker?.file_id || null,
-                    button_rows: [], // Estrutura em matriz
+                    button_rows: [],
                     pin: false,
                     recurrence: "IMEDIATO"
                 };
@@ -532,8 +532,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let draft = rawDraft ? JSON.parse(rawDraft) : null;
 
                 if (draft) {
-                    let rawText = update.message.text || "";
-                    let entities = update.message.entities || null;
+                    let rawText = update.message.text || update.message.caption || "";
+                    let entities = update.message.entities || update.message.caption_entities || null;
                     draft.text = converterEntidadesParaHTML(rawText, entities);
                     await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
                 }
@@ -850,29 +850,37 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 // 🛠 AUXILIARES E CONVERSORES DE MÍDIA / ANÚNCIOS
 // ==========================================================
 
-// Converte texto simples + entidades do Telegram em HTML com a tag <tg-emoji>
+// Converte caracteres e insere tags <tg-emoji> de forma segura via UTF-16
 function converterEntidadesParaHTML(texto, entidades) {
     if (!texto) return "";
-    if (!entidades || entidades.length === 0) {
-        return texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let textoEscapado = texto.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    if (!entidades || entidades.length === 0) return textoEscapado;
+
+    // Filtra apenas custom_emoji
+    let emojiEnts = entidades.filter(e => e.type === "custom_emoji" && e.custom_emoji_id);
+    if (emojiEnts.length === 0) return textoEscapado;
+
+    // Converte a string original em um array de UTF-16 code units para fateamento preciso
+    let codeUnits = Array.from(texto);
+    
+    // Ordena do final para o início para não corromper índices dos offsets
+    emojiEnts.sort((a, b) => b.offset - a.offset);
+
+    let arrResultado = Array.from(textoEscapado);
+
+    for (let ent of emojiEnts) {
+        let sliceEmoji = codeUnits.slice(ent.offset, ent.offset + ent.length).join("");
+        let emojiEscapado = sliceEmoji.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        let tagHtml = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiEscapado}</tg-emoji>`;
+        
+        let antes = codeUnits.slice(0, ent.offset).join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        let depois = codeUnits.slice(ent.offset + ent.length).join("").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        
+        textoEscapado = antes + tagHtml + depois;
+        codeUnits = Array.from(codeUnits.slice(0, ent.offset).join("") + tagHtml + codeUnits.slice(ent.offset + ent.length).join(""));
     }
 
-    // Ordenar entidades da última para a primeira para não afetar os índices de offset
-    let entSorted = [...entidades].sort((a, b) => b.offset - a.offset);
-    let resultado = texto;
-
-    for (let ent of entSorted) {
-        if (ent.type === "custom_emoji" && ent.custom_emoji_id) {
-            let inicio = ent.offset;
-            let fim = ent.offset + ent.length;
-            let emojiOriginal = resultado.substring(inicio, fim);
-            let tagTag = `<tg-emoji emoji-id="${ent.custom_emoji_id}">${emojiOriginal}</tg-emoji>`;
-            
-            resultado = resultado.substring(0, inicio) + tagTag + resultado.substring(fim);
-        }
-    }
-
-    return resultado;
+    return textoEscapado;
 }
 
 async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft) {
@@ -898,14 +906,13 @@ async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId,
     await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-// Dispara a postagem para o canal @Flamengo77 renderizando Emojis Premium e Botões
 async function dispararAnuncioNoCanal(env, botToken, draft) {
     const canal = "@Flamengo77";
     let inline_keyboard = draft.button_rows || [];
 
     let payload = {
         chat_id: canal,
-        parse_mode: "HTML", // Garante renderização das tags de Emoji Premium <tg-emoji>
+        parse_mode: "HTML",
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
     };
 
