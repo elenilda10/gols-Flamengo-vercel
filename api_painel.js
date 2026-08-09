@@ -43,7 +43,7 @@ export async function processarRotaApi(request, env) {
 
                 let finalPhotoUrl = cachedPhotoUrl || "";
 
-                // Busca foto de perfil diretamente no Telegram caso não esteja no cache
+                // Tenta buscar a foto real no Telegram caso não esteja no cache
                 if (!finalPhotoUrl && botToken) {
                     try {
                         const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
@@ -56,11 +56,16 @@ export async function processarRotaApi(request, env) {
 
                             if (fileData.ok && fileData.result?.file_path) {
                                 finalPhotoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                                // Cacheia por 24 horas no KV para economizar chamadas
                                 await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, finalPhotoUrl, { expirationTtl: 86400 });
                             }
                         }
                     } catch (e) {}
+                }
+
+                // Fallback dinâmico com iniciais no estilo Rubro-Negro caso o usuário não tenha foto pública no Telegram
+                if (!finalPhotoUrl) {
+                    const nomeUser = nomes[id] || "Torcedor";
+                    finalPhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nomeUser)}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
                 }
 
                 return {
