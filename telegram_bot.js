@@ -1,16 +1,3 @@
-export default {
-  async fetch(request, env) {
-    return await processarMensagemTelegram(request, env, env.TELEGRAM_TOKEN);
-  },
-
-  // ==========================================================
-  // ⏰ CRON TRIGGER: Executa tarefas agendadas
-  // ==========================================================
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(processarAgendamentosAnuncios(env));
-  }
-};
-
 // ==========================================================
 // 📥 FLUXO PRINCIPAL DO TELEGRAM
 // ==========================================================
@@ -167,24 +154,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return await res.json();
         };
 
-        const editarMensagemEspecifica = async (msgId, textoResposta, teclado = null) => {
-            let body = { chat_id: chatId, message_id: msgId, text: textoResposta, parse_mode: "HTML", disable_web_page_preview: true };
+        const editarMensagem = async (textoResposta, teclado = null) => {
+            let body = { chat_id: chatId, message_id: mensagem.message_id, text: textoResposta, parse_mode: "HTML", disable_web_page_preview: true };
             if (teclado) body.reply_markup = { inline_keyboard: teclado };
             const res = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
             return await res.json();
-        };
-
-        const editarMensagem = async (textoResposta, teclado = null) => {
-            await editarMensagemEspecifica(mensagem.message_id, textoResposta, teclado);
-        };
-
-        const deletarMensagem = async (msgId) => {
-            try {
-                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ chat_id: chatId, message_id: msgId })
-                });
-            } catch (e) {}
         };
 
         const responderCallback = async (aviso = "") => {
@@ -331,304 +305,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             };
             const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]];
             await enviarMensagem(textosAjuda[lang], tecladoAjuda);
-        }
-
-        // ==========================================================
-        // 🔐 GERENCIADOR PRIVADO DE ANÚNCIOS (/send)
-        // ==========================================================
-        else if (texto.startsWith("/send") || texto.startsWith("adv_")) {
-            if (String(userId) !== "7717528550") {
-                await enviarMensagem("❌ Acesso negado. Comando restrito ao administrador.");
-                return new Response("OK", { status: 200 });
-            }
-
-            if (texto.startsWith("/send")) {
-                if (update.message) await deletarMensagem(update.message.message_id);
-
-                let resMenu = await enviarMensagem(
-                    "📢 <b>NOVA POSTAGEM / BANNER (Canal @Flamengo77)</b>\n\n" +
-                    "Por favor, envie a mídia ou o texto da postagem agora.\n\n" +
-                    "<b>Tipos suportados:</b>\n" +
-                    "• Somente Texto\n" +
-                    "• Imagem, Vídeo, GIF ou Sticker (com ou sem legenda)",
-                    [[{ text: "❌ Cancelar", callback_data: "adv_cancel" }]]
-                );
-
-                if (resMenu.ok) {
-                    await env.GOLS_FLAMENGO_KV.put(`adv_main_msg_${userId}`, String(resMenu.result.message_id));
-                    await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_content");
-                }
-                return new Response("OK", { status: 200 });
-            }
-
-            let mainMsgId = await env.GOLS_FLAMENGO_KV.get(`adv_main_msg_${userId}`);
-            let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
-            let draft = rawDraft ? JSON.parse(rawDraft) : null;
-
-            if (texto === "adv_render_panel") {
-                await responderCallback();
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-                return new Response("OK", { status: 200 });
-            }
-
-            if (texto === "adv_skip_caption") {
-                await responderCallback();
-                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-                return new Response("OK", { status: 200 });
-            }
-
-            else if (texto === "adv_toggle_pin") {
-                draft.pin = !draft.pin;
-                await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                await responderCallback(draft.pin ? "Fixar ativado!" : "Fixar desativado!");
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-            }
-
-            else if (texto === "adv_add_btn") {
-                await responderCallback();
-                await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_button");
-                await editarMensagemEspecifica(mainMsgId,
-                    "🔘 <b>ADICIONAR BOTÕES INLINE</b>\n\n" +
-                    "Envie os botões no chat escolhendo uma das opções de formato abaixo:\n\n" +
-                    "1️⃣ <b>1 botão por linha:</b>\n" +
-                    "<code>Texto | https://link.com</code>\n\n" +
-                    "2️⃣ <b>2 botões lado a lado:</b>\n" +
-                    "<code>Texto 1 | https://link1.com + Texto 2 | https://link2.com</code>\n\n" +
-                    "3️⃣ <b>3 botões lado a lado:</b>\n" +
-                    "<code>Texto 1 | link1.com + Texto 2 | link2.com + Texto 3 | link3.com</code>\n\n" +
-                    "4️⃣ <b>Várias linhas de uma vez:</b>\n" +
-                    "Envie cada linha de botões em uma nova linha de mensagem!",
-                    [
-                        [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
-                        [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                    ]
-                );
-                return new Response("OK", { status: 200 });
-            }
-
-            else if (texto === "adv_set_schedule") {
-                await responderCallback();
-                const txtSch = "⏰ <b>PROGRAMAÇÃO (Horário de Brasília)</b>\n\nEscolha a frequência de publicação:";
-                const kbSch = [
-                    [{ text: "➡️ Envio Único Agendado", callback_data: "adv_mode_once" }],
-                    [{ text: "🔄 Diariamente", callback_data: "adv_mode_daily" }],
-                    [{ text: "📅 Semanalmente", callback_data: "adv_mode_weekly" }],
-                    [{ text: "📆 Mensalmente", callback_data: "adv_mode_monthly" }],
-                    [{ text: "🗓 Anualmente", callback_data: "adv_mode_yearly" }],
-                    [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
-                    [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                ];
-                await editarMensagemEspecifica(mainMsgId, txtSch, kbSch);
-                return new Response("OK", { status: 200 });
-            }
-
-            else if (texto.startsWith("adv_mode_")) {
-                let mode = texto.replace("adv_mode_", "");
-                draft.recurrence = mode;
-                await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_schedule_times");
-                await responderCallback();
-
-                let instrucao = "";
-                if (mode === "once") {
-                    instrucao = "Informe o horário de publicação e remoção (Horário de Brasília):\n\n<code>DD/MM/AAAA HH:MM | DD/MM/AAAA HH:MM</code>\n\n<i>Exemplo: 15/08/2026 14:00 | 18/08/2026 18:00</i>\n(Envie apenas a 1ª data caso não queira auto-remoção).";
-                } else if (mode === "daily") {
-                    instrucao = "Informe o horário de Brasília e a data limite final:\n\n<code>HH:MM | DD/MM/AAAA</code>\n\n<i>Exemplo: 10:00 | 31/12/2026</i>";
-                } else if (mode === "weekly") {
-                    instrucao = "Informe o dia da semana (0=Dom, 1=Seg, 2=Ter...), horário de Brasília e data limite:\n\n<code>DIA | HH:MM | DD/MM/AAAA</code>\n\n<i>Exemplo: 1 | 20:00 | 31/12/2026</i>";
-                } else if (mode === "monthly") {
-                    instrucao = "Informe o dia do mês, horário de Brasília e data limite:\n\n<code>DIA | HH:MM | DD/MM/AAAA</code>\n\n<i>Exemplo: 5 | 09:00 | 31/12/2026</i>";
-                } else if (mode === "yearly") {
-                    instrucao = "Informe o dia/mês, horário de Brasília e data limite:\n\n<code>DD/MM | HH:MM | DD/MM/AAAA</code>\n\n<i>Exemplo: 25/12 | 12:00 | 31/12/2030</i>";
-                }
-
-                await editarMensagemEspecifica(mainMsgId, 
-                    `📅 <b>DEFINIR AGENDAMENTO (${mode.toUpperCase()})</b>\n\n${instrucao}`, 
-                    [
-                        [{ text: "🔙 Voltar ao Agendamento", callback_data: "adv_set_schedule" }],
-                        [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                    ]
-                );
-                return new Response("OK", { status: 200 });
-            }
-
-            else if (texto === "adv_send_now") {
-                await responderCallback("Publicando...");
-                let msgIdCreated = await dispararAnuncioNoCanal(env, botToken, draft);
-                await env.GOLS_FLAMENGO_KV.delete(`adv_draft_${userId}`);
-                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                await env.GOLS_FLAMENGO_KV.delete(`adv_main_msg_${userId}`);
-                
-                if (msgIdCreated) {
-                    await editarMensagemEspecifica(mainMsgId, "✅ <b>Anúncio publicado com sucesso no canal @Flamengo77!</b>");
-                } else {
-                    await editarMensagemEspecifica(mainMsgId, "❌ <b>Erro ao publicar anúncio. Verifique se o bot é administrador do canal.</b>");
-                }
-                return new Response("OK", { status: 200 });
-            }
-
-            else if (texto === "adv_cancel") {
-                await env.GOLS_FLAMENGO_KV.delete(`adv_draft_${userId}`);
-                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                await env.GOLS_FLAMENGO_KV.delete(`adv_main_msg_${userId}`);
-                if (isCallback) await editarMensagem("❌ <b>Criação de anúncio cancelada.</b>");
-                return new Response("OK", { status: 200 });
-            }
-        }
-
-        // ==========================================================
-        // 🔐 CAPTURA E PROCESSAMENTO DAS RESPOSTAS DO ADMIN
-        // ==========================================================
-        let adminState = await env.GOLS_FLAMENGO_KV.get(`adv_state_${userId}`);
-        if (adminState && String(userId) === "7717528550" && update.message) {
-            let userMsgId = update.message.message_id;
-            let mainMsgId = await env.GOLS_FLAMENGO_KV.get(`adv_main_msg_${userId}`);
-
-            // Estágio 1: Receber Mídia/Texto
-            if (adminState === "waiting_content") {
-                await deletarMensagem(userMsgId);
-
-                let targetMsg = update.message;
-                let rawText = targetMsg.text || targetMsg.caption || "";
-                let entities = targetMsg.entities || targetMsg.caption_entities || null;
-
-                let draft = {
-                    type: targetMsg.photo ? "photo" : targetMsg.video ? "video" : targetMsg.animation ? "animation" : targetMsg.sticker ? "sticker" : "text",
-                    text: rawText,
-                    entities: entities, // Armazena a estrutura nativa de entidades
-                    file_id: targetMsg.photo ? targetMsg.photo[targetMsg.photo.length - 1].file_id : targetMsg.video?.file_id || targetMsg.animation?.file_id || targetMsg.sticker?.file_id || null,
-                    button_rows: [],
-                    pin: false,
-                    recurrence: "IMEDIATO"
-                };
-
-                await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-
-                if (draft.type !== "text" && !draft.text) {
-                    await env.GOLS_FLAMENGO_KV.put(`adv_state_${userId}`, "waiting_caption_input");
-                    await editarMensagemEspecifica(mainMsgId,
-                        "📝 <b>ADICIONAR LEGENDA</b>\n\n" +
-                        "Você enviou uma mídia sem legenda. Deseja enviar um texto/legenda para acompanha-la?\n\n" +
-                        "<i>Envie o texto desejado no chat ou clique em Pular.</i>",
-                        [
-                            [{ text: "➡️ Pular Legenda", callback_data: "adv_skip_caption" }],
-                            [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                        ]
-                    );
-                    return new Response("OK", { status: 200 });
-                }
-
-                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-                return new Response("OK", { status: 200 });
-            }
-
-            // Estágio 1.5: Captura opcional de legenda
-            if (adminState === "waiting_caption_input") {
-                await deletarMensagem(userMsgId);
-                let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
-                let draft = rawDraft ? JSON.parse(rawDraft) : null;
-
-                if (draft) {
-                    draft.text = update.message.text || update.message.caption || "";
-                    draft.entities = update.message.entities || update.message.caption_entities || null;
-                    await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                }
-
-                await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-                return new Response("OK", { status: 200 });
-            }
-
-            let rawDraft = await env.GOLS_FLAMENGO_KV.get(`adv_draft_${userId}`);
-            let draft = rawDraft ? JSON.parse(rawDraft) : null;
-
-            // Estágio 2: Processar linhas e botões informados no formato flexível
-            if (adminState === "waiting_button" && draft) {
-                await deletarMensagem(userMsgId);
-
-                let textoEntrada = update.message.text || "";
-                let linhas = textoEntrada.split("\n").map(l => l.trim()).filter(Boolean);
-                let novasLinhas = [];
-
-                for (let linha of linhas) {
-                    let botoesNaLinha = linha.split("+").map(b => b.trim()).filter(Boolean);
-                    let row = [];
-
-                    for (let btnStr of botoesNaLinha) {
-                        if (btnStr.includes("|")) {
-                            let partes = btnStr.split("|");
-                            row.push({ text: partes[0].trim(), url: partes[1].trim() });
-                        }
-                    }
-
-                    if (row.length > 0) {
-                        novasLinhas.push(row);
-                    }
-                }
-
-                if (novasLinhas.length > 0) {
-                    if (!draft.button_rows) draft.button_rows = [];
-                    draft.button_rows = draft.button_rows.concat(novasLinhas);
-
-                    await env.GOLS_FLAMENGO_KV.put(`adv_draft_${userId}`, JSON.stringify(draft));
-                    await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-                    await renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft);
-                } else {
-                    await editarMensagemEspecifica(mainMsgId, 
-                        "❌ <b>Formato Inválido!</b>\n\nEnvie no formato ex:\n<code>Texto | https://link.com</code>\nou\n<code>Texto 1 | link1.com + Texto 2 | link2.com</code>", 
-                        [
-                            [{ text: "🔙 Voltar ao Painel", callback_data: "adv_render_panel" }],
-                            [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                        ]
-                    );
-                }
-                return new Response("OK", { status: 200 });
-            }
-
-            // Estágio 3: Agendamento com fuso horário de Brasília
-            if (adminState === "waiting_schedule_times" && draft) {
-                await deletarMensagem(userMsgId);
-                let p = texto.split("|").map(s => s.trim());
-                try {
-                    if (draft.recurrence === "once") {
-                        draft.publish_at = parseDateStringToTimestampBrasilia(p[0]);
-                        if (p[1]) draft.expire_at = parseDateStringToTimestampBrasilia(p[1]);
-                    } else if (draft.recurrence === "daily") {
-                        draft.time = p[0];
-                        draft.until = parseDateStringToTimestampBrasilia(p[1] + " 23:59");
-                    } else if (draft.recurrence === "weekly" || draft.recurrence === "monthly") {
-                        draft.day = p[0];
-                        draft.time = p[1];
-                        draft.until = parseDateStringToTimestampBrasilia(p[2] + " 23:59");
-                    } else if (draft.recurrence === "yearly") {
-                        draft.date_day_month = p[0];
-                        draft.time = p[1];
-                        draft.until = parseDateStringToTimestampBrasilia(p[2] + " 23:59");
-                    }
-
-                    let advId = "adv_" + Date.now();
-                    let anunciosSalvosRaw = await env.GOLS_FLAMENGO_KV.get("ANUNCIOS_AGENDADOS");
-                    let anunciosSalvos = anunciosSalvosRaw ? JSON.parse(anunciosSalvosRaw) : [];
-                    anunciosSalvos.push({ id: advId, draft: draft });
-                    
-                    await env.GOLS_FLAMENGO_KV.put("ANUNCIOS_AGENDADOS", JSON.stringify(anunciosSalvos));
-                    await env.GOLS_FLAMENGO_KV.delete(`adv_draft_${userId}`);
-                    await env.GOLS_FLAMENGO_KV.delete(`adv_state_${userId}`);
-
-                    await editarMensagemEspecifica(mainMsgId, "✅ <b>ANÚNCIO PROGRAMADO COM SUCESSO!</b>\n\nHorário configurado com fuso oficial de Brasília (UTC-3).");
-                } catch (e) {
-                    await editarMensagemEspecifica(mainMsgId, 
-                        "❌ <b>Erro na Data/Hora:</b> " + e.message, 
-                        [
-                            [{ text: "🔙 Tentar Novamente", callback_data: "adv_set_schedule" }],
-                            [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-                        ]
-                    );
-                }
-                return new Response("OK", { status: 200 });
-            }
         }
 
         // ==========================================================
@@ -815,23 +491,47 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // ⚽ CAPTURAR PALPITES NOS COMENTÁRIOS E REAGIR COM 👍
+        // ⚽ CAPTURAR PALPITES APENAS NOS COMENTÁRIOS DO BOLÃO E REAGIR COM 👍
         // ==========================================================
         else if (texto) {
             const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
+
             if (regexPlacar.test(texto)) {
                 let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+
                 if (bolaoAberto === "true") {
                     let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+
                     if (postId) {
-                        await env.GOLS_FLAMENGO_KV.put("palpite_user_" + postId + "_" + userId, JSON.stringify({ palpite: texto.trim(), nome: realName, hora: Date.now() }));
+                        const replyTo = mensagem.reply_to_message;
+
+                        // Valida se a mensagem é um comentário direto da postagem do canal
+                        // ou do espelhamento automático no grupo de discussão
+                        const eComentarioDoBolao = replyTo && (
+                            String(replyTo.message_id) === String(postId) ||
+                            String(replyTo.forward_from_message_id) === String(postId)
+                        );
+
+                        if (eComentarioDoBolao) {
+                            await env.GOLS_FLAMENGO_KV.put(
+                                "palpite_user_" + postId + "_" + userId,
+                                JSON.stringify({ palpite: texto.trim(), nome: realName, hora: Date.now() })
+                            );
+
+                            try {
+                                await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        chat_id: chatId,
+                                        message_id: mensagem.message_id,
+                                        reaction: [{ type: "emoji", emoji: "👍" }],
+                                        is_big: false
+                                    })
+                                });
+                            } catch (e) {}
+                        }
                     }
-                    try {
-                        await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
-                            method: "POST", headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id, reaction: [{ type: "emoji", emoji: "👍" }], is_big: false })
-                        });
-                    } catch (e) {}
                 }
             }
         }
@@ -842,129 +542,4 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         console.error("ERRO GRAVE INTERNO:", erro.message);
         return new Response("OK", { status: 200 });
     }
-}
-
-// ==========================================================
-// 🛠 AUXILIARES DO PAINEL DE ANÚNCIOS
-// ==========================================================
-
-async function renderizarPainelAnuncio(env, botToken, userId, chatId, mainMsgId, draft) {
-    let totalBotoes = draft.button_rows ? draft.button_rows.reduce((acc, row) => acc + row.length, 0) : 0;
-
-    const txtInfo = `⚙️ <b>PAINEL DO ANÚNCIO / BANNER</b>\n\n` +
-                    `📱 <b>Tipo de Mídia:</b> ${draft.type.toUpperCase()}\n` +
-                    `📝 <b>Legenda/Texto:</b> ${draft.text ? `<i>"${draft.text.substring(0, 40)}..."</i>` : "Nenhum"}\n` +
-                    `🔘 <b>Botões Adicionados:</b> ${totalBotoes}\n` +
-                    `📌 <b>Fixar no Canal:</b> ${draft.pin ? "SIM" : "NÃO"}\n` +
-                    `⏰ <b>Programação:</b> ${draft.recurrence.toUpperCase()}\n\n` +
-                    `Escolha abaixo para ajustar as configurações:`;
-
-    const keyboard = [
-        [{ text: "➕ Adicionar Botão URL", callback_data: "adv_add_btn" }],
-        [{ text: draft.pin ? "📌 Desafixar Mensagem" : "📌 Fixar Mensagem", callback_data: "adv_toggle_pin" }],
-        [{ text: "⏰ Definir Agendamento / Programação", callback_data: "adv_set_schedule" }],
-        [{ text: "🚀 ENVIAR AGORA", callback_data: "adv_send_now" }],
-        [{ text: "❌ Cancelar Anúncio", callback_data: "adv_cancel" }]
-    ];
-
-    let body = { chat_id: chatId, message_id: mainMsgId, text: txtInfo, parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } };
-    await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-}
-
-// Envia a mensagem nativamente com repasse direto de entities (Emojis Premium)
-async function dispararAnuncioNoCanal(env, botToken, draft) {
-    const canal = "@Flamengo77";
-    let inline_keyboard = draft.button_rows || [];
-
-    let payload = {
-        chat_id: canal,
-        reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
-    };
-
-    let endpoint = "sendMessage";
-    if (draft.type === "photo") {
-        endpoint = "sendPhoto";
-        payload.photo = draft.file_id;
-        payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
-    } else if (draft.type === "video") {
-        endpoint = "sendVideo";
-        payload.video = draft.file_id;
-        payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
-    } else if (draft.type === "animation") {
-        endpoint = "sendAnimation";
-        payload.animation = draft.file_id;
-        payload.caption = draft.text;
-        if (draft.entities) payload.caption_entities = draft.entities;
-    } else if (draft.type === "sticker") {
-        endpoint = "sendSticker";
-        payload.sticker = draft.file_id;
-    } else {
-        payload.text = draft.text;
-        if (draft.entities) payload.entities = draft.entities;
-    }
-
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    });
-
-    const data = await res.json();
-
-    if (data.ok && draft.pin) {
-        try {
-            await fetch(`https://api.telegram.org/bot${botToken}/pinChatMessage`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chat_id: canal, message_id: data.result.message_id, disable_notification: false })
-            });
-        } catch (e) {}
-    }
-
-    return data.ok ? data.result.message_id : null;
-}
-
-async function processarAgendamentosAnuncios(env) {
-    let raw = await env.GOLS_FLAMENGO_KV.get("ANUNCIOS_AGENDADOS");
-    if (!raw) return;
-
-    let anuncios = JSON.parse(raw);
-    let agora = Date.now();
-    let atualizados = [];
-
-    for (let item of anuncios) {
-        let draft = item.draft;
-
-        if (draft.until && agora > draft.until) continue;
-
-        if (draft.recurrence === "once") {
-            if (draft.publish_at && agora >= draft.publish_at && !item.published_msg_id) {
-                let msgId = await dispararAnuncioNoCanal(env, env.TELEGRAM_TOKEN, draft);
-                if (msgId) item.published_msg_id = msgId;
-            }
-
-            if (draft.expire_at && agora >= draft.expire_at && item.published_msg_id) {
-                try {
-                    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/deleteMessage`, {
-                        method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ chat_id: "@Flamengo77", message_id: item.published_msg_id })
-                    });
-                } catch (e) {}
-                continue;
-            }
-        }
-        
-        atualizados.push(item);
-    }
-
-    await env.GOLS_FLAMENGO_KV.put("ANUNCIOS_AGENDADOS", JSON.stringify(atualizados));
-}
-
-function parseDateStringToTimestampBrasilia(str) {
-    let [data, hora] = str.trim().split(" ");
-    let [dia, mes, ano] = data.split("/");
-    let [h, m] = hora ? hora.split(":") : ["00", "00"];
-    
-    let isoFormatted = `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}T${h.padStart(2, '0')}:${m.padStart(2, '0')}:00-03:00`;
-    return new Date(isoFormatted).getTime();
 }
