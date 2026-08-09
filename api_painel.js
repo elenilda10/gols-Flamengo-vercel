@@ -16,7 +16,7 @@ export async function processarRotaApi(request, env) {
         return new Response(null, { status: 204, headers: headersCORS });
     }
 
-    // 📊 API 1: /api/ranking_api (Tabela Completa em Paralelo)
+    // 📊 API 1: /api/ranking_api (Tabela Completa com Fotos e Nomes)
     if (url.pathname === "/api/ranking_api") {
         try {
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
@@ -27,9 +27,9 @@ export async function processarRotaApi(request, env) {
             const ids = Object.keys(ranking);
 
             let rankingArray = await Promise.all(ids.map(async (id) => {
-                const [acertosRaw, cachedPhotoRaw] = await Promise.all([
+                const [acertosRaw, cachedPhotoUrl] = await Promise.all([
                     env.GOLS_FLAMENGO_KV.get("acertos_" + id),
-                    env.GOLS_FLAMENGO_KV.get("profile_photo_" + id)
+                    env.GOLS_FLAMENGO_KV.get("profile_photo_url_" + id)
                 ]);
 
                 let acertos = [];
@@ -41,6 +41,28 @@ export async function processarRotaApi(request, env) {
                     } catch (e) { acertos = []; }
                 }
 
+                let finalPhotoUrl = cachedPhotoUrl || "";
+
+                // Busca foto de perfil diretamente no Telegram caso não esteja no cache
+                if (!finalPhotoUrl && botToken) {
+                    try {
+                        const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+                        const photosData = await photosRes.json();
+
+                        if (photosData.ok && photosData.result?.photos?.length > 0) {
+                            const fileId = photosData.result.photos[0][0].file_id;
+                            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+                            const fileData = await fileRes.json();
+
+                            if (fileData.ok && fileData.result?.file_path) {
+                                finalPhotoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                                // Cacheia por 24 horas no KV para otimizar velocidade
+                                await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, finalPhotoUrl, { expirationTtl: 86400 });
+                            }
+                        }
+                    } catch (e) {}
+                }
+
                 return {
                     id: String(id),
                     uid: String(id),
@@ -49,7 +71,8 @@ export async function processarRotaApi(request, env) {
                     pontos: Number(ranking[id]) || 0,
                     total: acertos.length,
                     acertos: acertos,
-                    photo_file_id: cachedPhotoRaw || ""
+                    photo_url: finalPhotoUrl,
+                    photo_file_id: finalPhotoUrl
                 };
             }));
 
@@ -89,7 +112,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ PAINEL VISUAL: /api/painel-addgoal (Formulário com Modais de Confirmação)
+    // 🖥️ PAINEL VISUAL: /api/painel-addgoal
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -98,10 +121,13 @@ export async function processarRotaApi(request, env) {
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>⚽ Painel de Controle - Gols do Flamengo</title>
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
             <style>
-                body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
+                body { background-color: #09090b; color: #fff; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 15px; box-sizing: border-box; }
                 .card { width: 100%; max-width: 550px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
-                h1 { margin: 0 0 5px 0; font-size: 24px; font-weight: 800; }
+                h1 { margin: 0 0 5px 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
                 p { color: #a1a1aa; margin: 0 0 15px 0; font-size: 14px; }
                 .nav-link { display: inline-block; color: #f87171; font-size: 14px; font-weight: 700; text-decoration: none; margin-bottom: 20px; border-bottom: 1px dashed #f87171; padding-bottom: 2px; }
                 .alert { padding: 12px; border-radius: 10px; margin-bottom: 18px; font-size: 14px; font-weight: 600; display: none; border: 1px solid rgba(255,255,255,0.1); word-break: break-all; }
@@ -110,9 +136,9 @@ export async function processarRotaApi(request, env) {
                 .search-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: flex-end; background: rgba(255,255,255,0.02); padding: 12px; border-radius: 12px; border: 1px dashed rgba(255,255,255,0.1); margin-bottom: 5px; }
                 .field { display: flex; flex-direction: column; gap: 5px; }
                 label { font-size: 12px; font-weight: 600; color: #d4d4d8; }
-                input { background: #09090b; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 14px 12px; color: #fff; font-size: 15px; outline: none; width: 100%; box-sizing: border-box; }
-                .btn-primary { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); width: 100%; }
-                .btn-secondary { background: #27272a; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 13px 18px; font-size: 14px; font-weight: 700; cursor: pointer; height: 47px; box-sizing: border-box; }
+                input { background: #09090b; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 14px 12px; color: #fff; font-size: 15px; font-family: 'Inter', sans-serif; outline: none; width: 100%; box-sizing: border-box; }
+                .btn-primary { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border: 0; border-radius: 12px; padding: 16px; font-size: 15px; font-family: 'Inter', sans-serif; font-weight: 700; cursor: pointer; margin-top: 5px; box-shadow: 0 8px 12px rgba(239, 68, 68, 0.2); width: 100%; }
+                .btn-secondary { background: #27272a; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 13px 18px; font-size: 14px; font-family: 'Inter', sans-serif; font-weight: 700; cursor: pointer; height: 47px; box-sizing: border-box; }
                 
                 .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box; z-index:1000; opacity:0; pointer-events:none; transition: opacity 0.2s ease; }
                 .modal-overlay.active { opacity:1; pointer-events:auto; }
@@ -120,8 +146,8 @@ export async function processarRotaApi(request, env) {
                 .modal-title { margin:0 0 10px 0; font-size:20px; font-weight:800; display:flex; align-items:center; gap:8px; }
                 .modal-body { font-size:14px; color:#e4e4e7; line-height:1.5; background:#09090b; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.06); margin-bottom:18px; max-height:260px; overflow-y:auto; }
                 .modal-buttons { display:flex; justify-content:flex-end; gap:10px; }
-                .btn-modal-confirm { background:#ef4444; color:#fff; border:0; padding:11px 18px; font-weight:700; border-radius:8px; cursor:pointer; font-size:14px; }
-                .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:11px 18px; font-weight:700; border-radius:8px; cursor:pointer; font-size:14px; }
+                .btn-modal-confirm { background:#ef4444; color:#fff; border:0; padding:11px 18px; font-weight:700; font-family: 'Inter', sans-serif; border-radius:8px; cursor:pointer; font-size:14px; }
+                .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:11px 18px; font-weight:700; font-family: 'Inter', sans-serif; border-radius:8px; cursor:pointer; font-size:14px; }
                 
                 @media (max-width: 600px) {
                     body { padding: 10px; }
@@ -342,7 +368,7 @@ export async function processarRotaApi(request, env) {
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
-    // 📋 LISTA DE GOLS INTELIGENTE: /api/lista-gols (Busca Global + Paginação por Demanda no Servidor)
+    // 📋 LISTA DE GOLS INTELIGENTE: /api/lista-gols
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
             let queryText = url.searchParams.get("q") || "";
@@ -408,14 +434,17 @@ export async function processarRotaApi(request, env) {
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>📋 Lista de Gols Cadastrados</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
                 <style>
-                    body { background-color: #09090b; color: #fff; font-family: -apple-system, sans-serif; padding: 20px; margin: 0; display: flex; justify-content: center; }
+                    body { background-color: #09090b; color: #fff; font-family: 'Inter', sans-serif; padding: 20px; margin: 0; display: flex; justify-content: center; }
                     .container { width: 100%; max-width: 850px; background: #18181b; border-radius: 20px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); box-sizing: border-box; }
                     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; }
-                    h1 { margin: 0; font-size: 24px; font-weight: 800; }
+                    h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
                     .btn-back { background: #27272a; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); }
                     .search-container { position: relative; width: 100%; margin-bottom: 20px; }
-                    .search-input { width: 100%; background: #09090b; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 15px 15px 15px 42px; color: #fff; font-size: 15px; outline: none; box-sizing: border-box; }
+                    .search-input { width: 100%; background: #09090b; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 15px 15px 15px 42px; color: #fff; font-size: 15px; font-family: 'Inter', sans-serif; outline: none; box-sizing: border-box; }
                     .search-input:focus { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 2px rgba(239,68,68,0.15); }
                     .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: #a1a1aa; font-size: 16px; pointer-events: none; }
                     .table-wrapper { width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); }
@@ -425,7 +454,7 @@ export async function processarRotaApi(request, env) {
                     tr:hover { background: rgba(255,255,255,0.02); }
                     .id-cell { font-size: 12px; color: #f87171; }
                     .btn-edit { background: #27272a; border: 1px solid rgba(255,255,255,0.1); color: #fff; text-decoration: none; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; }
-                    .btn-delete { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border:0; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; display: inline-block; cursor:pointer; }
+                    .btn-delete { background: linear-gradient(135deg, #ef4444, #b91c1c); color: #fff; border:0; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; font-family: 'Inter', sans-serif; display: inline-block; cursor:pointer; }
                     .no-results { display: ${totalEncontrados === 0 ? 'block' : 'none'}; padding: 30px; text-align: center; color: #a1a1aa; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; margin-top: 10px; }
                     .info-txt { font-size: 12px; color: #a1a1aa; margin-top: 8px; display: ${url.searchParams.get("q") ? 'none' : 'block'}; }
                     
@@ -434,8 +463,8 @@ export async function processarRotaApi(request, env) {
                     .modal-content { background:#18181b; border: 1px solid rgba(239,68,68,0.25); border-radius:18px; width:100%; max-width:420px; padding:22px; box-sizing:border-box; box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
                     .modal-title { margin:0 0 10px 0; font-size:18px; font-weight:800; color:#ef4444; }
                     .modal-buttons { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
-                    .btn-modal-delete { background:#ef4444; color:#fff; border:0; padding:10px 16px; font-weight:700; border-radius:8px; cursor:pointer; font-size:13px; }
-                    .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:10px 16px; font-weight:700; border-radius:8px; cursor:pointer; font-size:13px; }
+                    .btn-modal-delete { background:#ef4444; color:#fff; border:0; padding:10px 16px; font-weight:700; font-family: 'Inter', sans-serif; border-radius:8px; cursor:pointer; font-size:13px; }
+                    .btn-modal-cancel { background:#27272a; color:#fff; border:1px solid rgba(255,255,255,0.08); padding:10px 16px; font-weight:700; font-family: 'Inter', sans-serif; border-radius:8px; cursor:pointer; font-size:13px; }
 
                     @media (max-width: 600px) {
                         th, td { padding: 10px; font-size: 13px; }
@@ -546,7 +575,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // ⚙️ MOTOR DE INTELIGÊNCIA DO BOLÃO: /api/processar-bolao (100% ADAPTADO NA CLOUDFLARE)
+    // ⚙️ MOTOR DO BOLÃO: /api/processar-bolao
     else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
         try {
             const data = await request.json();
@@ -556,7 +585,7 @@ export async function processarRotaApi(request, env) {
 
             let bolaoStatus = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
             if (bolaoStatus === "false" || bolaoStatus === null) {
-                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
@@ -568,16 +597,16 @@ export async function processarRotaApi(request, env) {
                 return new Response(JSON.stringify({ ok: false, error: "fechado" }), { status: 200, headers: headersCORS });
             }
 
-            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_\${postId}_\${userId}`);
+            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_${postId}_${userId}`);
             if (palpiteExistente) {
                 let jsp = JSON.parse(palpiteExistente);
-                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
                         reply_to_message_id: Number(data.message_id), 
                         parse_mode: "Markdown", 
-                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *\${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
+                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
                     })
                 });
                 return new Response(JSON.stringify({ ok: false, error: "duplicado" }), { status: 200, headers: headersCORS });
@@ -601,7 +630,7 @@ export async function processarRotaApi(request, env) {
             }
 
             if (!valido) {
-                await fetch(`https://api.telegram.org/bot\${botToken}/sendMessage`, {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
@@ -633,9 +662,9 @@ export async function processarRotaApi(request, env) {
             listaGlobal[userId] = palpiteObjeto;
             
             await env.GOLS_FLAMENGO_KV.put(chaveListaGlobal, JSON.stringify(listaGlobal));
-            await env.GOLS_FLAMENGO_KV.put(`palpite_user_\${postId}_\${userId}`, JSON.stringify(palpiteObjeto));
+            await env.GOLS_FLAMENGO_KV.put(`palpite_user_${postId}_${userId}`, JSON.stringify(palpiteObjeto));
 
-            await fetch(`https://api.telegram.org/bot\${botToken}/setMessageReaction`, {
+            await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
                     chat_id: data.chat_id, 
@@ -650,7 +679,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🗑️ ROTA DE AÇÃO: /api/deletegoal (Deleta o gol e limpa o índice geral)
+    // 🗑️ ROTA DE AÇÃO: /api/deletegoal
     else if (url.pathname === "/api/deletegoal" && request.method === "DELETE") {
         try {
             const id = url.searchParams.get("id");
@@ -675,7 +704,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🔍 AUXILIAR DE BUSCA: /api/getgoal (Carrega dados para edição rápida)
+    // 🔍 AUXILIAR DE BUSCA: /api/getgoal
     else if (url.pathname === "/api/getgoal" && request.method === "GET") {
         try {
             const id = url.searchParams.get("id");
@@ -688,7 +717,7 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action (Salva criação ou alteração de gols)
+    // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action
     else if (url.pathname === "/api/addgoal-action" && request.method === "POST") {
         try {
             const body = await request.json();
@@ -741,11 +770,11 @@ export async function processarRotaApi(request, env) {
             try {
                 const CANAL_BACKUP = "-1003703318973";
                 const txtStatus = isEditing ? "📝 Gol editado e modificado" : "📌 Novo gol adicionado";
-                await fetch(`https://api.telegram.org/bot\${botToken}/sendVideo`, {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         chat_id: CANAL_BACKUP, video: goalData.file_id,
-                        caption: `📌 <b>\${txtStatus} via Painel Web</b>\n\n🆔 <code>\${goalData.id}</code>\n⚽ \${goalData.jogo}\n\n#⃣ Autor: \${goalData.autor}\n🅰 Assistência: \${goalData.assistencia}\n🏆 \${goalData.campeonato} - \${goalData.fase}`,
+                        caption: `📌 <b>${txtStatus} via Painel Web</b>\n\n🆔 <code>${goalData.id}</code>\n⚽ ${goalData.jogo}\n\n#⃣ Autor: ${goalData.autor}\n🅰 Assistência: ${goalData.assistencia}\n🏆 ${goalData.campeonato} - ${goalData.fase}`,
                         parse_mode: "HTML"
                     })
                 });
@@ -775,20 +804,18 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-        // 🏆 APURAÇÃO DO BOLÃO: /api/apurar-bolao (Processa quem acertou e injeta no ranking global)
+    // 🏆 APURAÇÃO DO BOLÃO: /api/apurar-bolao
     else if (url.pathname === "/api/apurar-bolao" && request.method === "POST") {
         try {
             const body = await request.json();
             const adminId = String(body.admin_id || "");
             const postId = String(body.post_id || "");
-            const placarReal = String(body.placar_real || "").toLowerCase().trim(); // Ex: "2x1"
+            const placarReal = String(body.placar_real || "").toLowerCase().trim();
 
-            // Trava de segurança para apenas VOCÊ apurar
             if (adminId !== "7717528550") {
                 return new Response(JSON.stringify({ ok: false, error: "Acesso negado" }), { status: 401, headers: headersCORS });
             }
 
-            // 1. Puxa todos os palpites temporários acumulados no KV para esta rodada
             let chaveListaGlobal = "palpites_" + postId;
             let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
             if (!listaGlobalRaw) {
@@ -796,7 +823,6 @@ export async function processarRotaApi(request, env) {
             }
             let listaPalpites = JSON.parse(listaGlobalRaw);
 
-            // 2. Puxa o ranking global atual e a tabela de nomes para atualizar
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
             let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
@@ -805,7 +831,6 @@ export async function processarRotaApi(request, env) {
             let ganhadoresId = [];
             let contagemGanhadores = 0;
 
-            // 3. Varre os palpites e filtra quem acertou o placar em cheio
             for (let uid in listaPalpites) {
                 let dadosTorcedor = listaPalpites[uid];
                 
@@ -813,12 +838,9 @@ export async function processarRotaApi(request, env) {
                     ganhadoresId.push(uid);
                     contagemGanhadores++;
 
-                    // Soma +1 ponto no ranking global do banco KV
                     rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
-                    // Garante que o nome e username mais recentes fiquem salvos
                     rankingNames[uid] = dadosTorcedor.nome || "Torcedor";
 
-                    // Registra o ID do post na lista de acertos individuais do usuário
                     let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
                     let acertosLista = acertosRaw ? JSON.parse(acertosRaw) : [];
                     if (!Array.isArray(acertosLista)) acertosLista = [];
@@ -829,13 +851,11 @@ export async function processarRotaApi(request, env) {
                 }
             }
 
-            // 4. Salva as tabelas atualizadas de volta no banco KV de forma permanente
             if (contagemGanhadores > 0) {
                 await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
                 await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
             }
 
-            // 5. Deleta os palpites temporários dessa rodada para limpar o banco KV
             await env.GOLS_FLAMENGO_KV.delete(chaveListaGlobal);
 
             return new Response(JSON.stringify({ 
@@ -848,7 +868,6 @@ export async function processarRotaApi(request, env) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
     }
-
 
     return new Response(JSON.stringify({ erro: "Rota não encontrada" }), { status: 404, headers: headersCORS });
 }
