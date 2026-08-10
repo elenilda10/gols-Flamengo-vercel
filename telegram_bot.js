@@ -607,59 +607,71 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-                    // ==========================================================
-        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS DE PERFIL DE TODOS NO RANKING
+               // ==========================================================
+        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS DE PERFIL (ASSÍNCRONO)
         // ==========================================================
         else if (texto === "/atualizar_fotos") {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
-            await enviarMensagem("🔄 <b>Iniciando varredura das fotos de perfil do ranking...</b>\n\nIsso pode levar alguns segundos.");
+            await enviarMensagem("🔄 <b>Iniciando varredura das fotos de perfil em segundo plano...</b>\n\nIsso pode levar alguns minutos. Você receberá um aviso ao concluir.");
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let ids = Object.keys(ranking);
+            // Executa o processamento em segundo plano sem estourar o timeout da mensagem
+            const processarFotosEmLote = async () => {
+                let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+                let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+                let ids = Object.keys(ranking);
 
-            let atualizados = 0;
-            let semFotoOuFechada = 0;
+                let atualizados = 0;
+                let semFotoOuFechada = 0;
 
-            for (let id of ids) {
-                try {
-                    // Busca a foto pública do usuário na API do Telegram
-                    const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
-                    const photosData = await photosRes.json();
+                for (let id of ids) {
+                    try {
+                        const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+                        const photosData = await photosRes.json();
 
-                    if (photosData.ok && photosData.result?.photos?.length > 0) {
-                        const fileId = photosData.result.photos[0][0].file_id;
-                        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-                        const fileData = await fileRes.json();
+                        if (photosData.ok && photosData.result?.photos?.length > 0) {
+                            const fileId = photosData.result.photos[0][0].file_id;
+                            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+                            const fileData = await fileRes.json();
 
-                        if (fileData.ok && fileData.result?.file_path) {
-                            const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                            
-                            // Salva no KV (expira em 30 dias para forçar renovação mensal)
-                            await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
-                            await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
-                            atualizados++;
+                            if (fileData.ok && fileData.result?.file_path) {
+                                const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                                
+                                await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
+                                await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
+                                atualizados++;
+                            } else {
+                                semFotoOuFechada++;
+                            }
                         } else {
                             semFotoOuFechada++;
                         }
-                    } else {
+                    } catch (err) {
                         semFotoOuFechada++;
                     }
-                } catch (err) {
-                    semFotoOuFechada++;
+                    
+                    // Pequena pausa para evitar tomar bloqueio por limite de taxa da API do Telegram
+                    await new Promise(r => setTimeout(r, 100));
                 }
-            }
 
-            await enviarMensagem(
-                `✅ <b>Atualização de Fotos Concluída!</b>\n\n` +
-                `🖼 Fotos atualizadas/encontradas: <b>${atualizados}</b>\n` +
-                `👤 Sem foto pública ou privada: <b>${semFotoOuFechada}</b>\n` +
-                `📊 Total de perfis verificados: <b>${ids.length}</b>`
-            );
+                // Envia a mensagem de conclusão diretamente no chat quando terminar
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        text: `✅ <b>Atualização de Fotos Concluída!</b>\n\n🖼 Fotos salvas: <b>${atualizados}</b>\n👤 Sem foto pública: <b>${semFotoOuFechada}</b>\n📊 Total verificado: <b>${ids.length}</b>`,
+                        parse_mode: "HTML"
+                    })
+                });
+            };
+
+            // Dispara a promessa em segundo plano
+            processarFotosEmLote();
 
             return new Response("OK", { status: 200 });
         }
+
             
         // ==========================================================
         // ⚽ CAPTURAR PALPITES APENAS NOS COMENTÁRIOS DO BOLÃO E REAGIR COM 👍
