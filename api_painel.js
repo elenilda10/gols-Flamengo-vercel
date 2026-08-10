@@ -155,6 +155,7 @@ export async function processarRotaApi(request, env) {
                     --accent-red: #dc2626;
                     --accent-green: #16a34a;
                     --accent-blue: #2563eb;
+                    --accent-orange: #d97706;
                     --text-primary: #f8fafc;
                     --text-muted: #94a3b8;
                     --font-main: 'Plus Jakarta Sans', -apple-system, sans-serif;
@@ -223,6 +224,7 @@ export async function processarRotaApi(request, env) {
                 .btn-green { background: var(--accent-green); }
                 .btn-red { background: var(--accent-red); }
                 .btn-blue { background: var(--accent-blue); width: 100%; }
+                .btn-orange { background: var(--accent-orange); width: 100%; }
                 .btn-purple { background: #7c3aed; width: 100%; }
 
                 .alert { padding: 14px; border-radius: 12px; font-size: 13px; font-weight: 600; display: none; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1); word-break: break-all; }
@@ -255,25 +257,61 @@ export async function processarRotaApi(request, env) {
                     <button class="btn btn-red" onclick="alterarStatus('false')">🔒 Bloquear Palpites</button>
                 </div>
 
-                <div class="section-title">🚀 1. Iniciar Novo Bolão no Canal</div>
+                <div class="section-title">👤 1. Editar Pontos e Acertos do Usuário</div>
+                <div class="field">
+                    <label>ID do Telegram do Usuário</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="user_id_search" placeholder="Ex: 7717528550">
+                        <button class="btn btn-blue" style="width:auto; padding:0 20px;" onclick="buscarUserRanking()">🔍 Buscar</button>
+                    </div>
+                </div>
+
+                <div id="userEditCard" style="display:none; background:rgba(255,255,255,0.02); border:1px dashed var(--border-color); padding:16px; border-radius:14px; margin-bottom:16px;">
+                    <div class="field">
+                        <label>Nome do Torcedor</label>
+                        <input type="text" id="user_nome_edit">
+                    </div>
+                    <div class="field">
+                        <label>Pontos Totais no Ranking</label>
+                        <input type="number" id="user_pontos_edit">
+                    </div>
+                    <div class="field">
+                        <label>Lista de Acertos (JSON Array)</label>
+                        <textarea id="user_acertos_edit" style="font-family:var(--font-code); font-size:12px;" placeholder='["GRÊMIO X FLAMENGO 19H30 -> Grêmio 0x1 Flamengo"]'></textarea>
+                    </div>
+                    <button class="btn btn-green" style="width:100%;" onclick="salvarUserRanking()">💾 Salvar Dados do Torcedor</button>
+                </div>
+
+                <div class="section-title">🔗 2. Vincular / Reativar Post do Canal</div>
+                <div class="field">
+                    <label>ID Numérico da Mensagem no Canal</label>
+                    <input type="text" id="vincular_post_id" placeholder="Ex: 1234">
+                </div>
+                <div class="field">
+                    <label>Confronto (Opcional se desejar atualizar)</label>
+                    <input type="text" id="vincular_confronto" value="${confrontoAtual !== "Nenhum no momento" ? confrontoAtual : ""}" placeholder="Ex: Flamengo X Vitória 19h30">
+                </div>
+                <button class="btn btn-orange" onclick="vincularPostExistente()">🔗 Reativar e Vincular Post no KV</button>
+
+                <div class="section-title">🚀 3. Iniciar Novo Bolão (Postar Foto)</div>
                 <div class="field">
                     <label>Confronto / Horário</label>
                     <input type="text" id="init_confronto" placeholder="Ex: FLAMENGO X VASCO 21H00">
                 </div>
                 <div class="field">
-                    <label>FileID da Foto do Bolão</label>
+                    <label>FileID da Foto Oficial do Bolão</label>
                     <input type="text" id="init_foto" placeholder="Cole o FileID longo da imagem">
                 </div>
-                <button class="btn btn-blue" onclick="iniciarBolaoWeb()">🚀 Publicar Postagem no Canal @Flamengo77</button>
+                <button class="btn btn-blue" onclick="iniciarBolaoWeb()">🚀 Publicar Nova Postagem no Canal @Flamengo77</button>
 
-                <div class="section-title">🥇 2. Gerenciar Lista de Vencedores Salvos</div>
+                <div class="section-title">🥇 4. Gerenciar Lista de Vencedores Salvos</div>
                 <div class="field">
                     <label>Legenda dos Vencedores (Editável)</label>
                     <textarea id="vencedores_texto" placeholder="Ex: 🥇 Torcedor 1 (Ver Palpite)...">${vencedoresTemp}</textarea>
                 </div>
                 <button class="btn btn-purple" onclick="salvarVencedoresManual()">💾 Gravar Vencedores no KV</button>
 
-                <div class="section-title">🏁 3. Encerrar Bolão e Postar Resultado</div>
+                <div class="section-title">🏁 5. Encerrar Bolão e Postar Resultado</div>
                 <div class="field">
                     <label>Placar Real do Jogo</label>
                     <input type="text" id="encerrar_placar" placeholder="Ex: 2x1">
@@ -299,6 +337,66 @@ export async function processarRotaApi(request, env) {
                     if(data.ok) {
                         mostrarAviso('Status alterado com sucesso!', true);
                         setTimeout(() => location.reload(), 800);
+                    }
+                }
+
+                async function buscarUserRanking() {
+                    const uid = document.getElementById('user_id_search').value.trim();
+                    if(!uid) return alert('Digite o ID do usuário!');
+
+                    const res = await fetch('/api/get-user-details?uid=' + uid);
+                    const data = await res.json();
+                    if(data.ok) {
+                        document.getElementById('user_nome_edit').value = data.nome || '';
+                        document.getElementById('user_pontos_edit').value = data.pontos || 0;
+                        document.getElementById('user_acertos_edit').value = JSON.stringify(data.acertos || [], null, 2);
+                        document.getElementById('userEditCard').style.display = 'block';
+                        mostrarAviso('Dados do usuário carregados!', true);
+                    } else {
+                        mostrarAviso('Usuário não encontrado no ranking.', false);
+                    }
+                }
+
+                async function salvarUserRanking() {
+                    const uid = document.getElementById('user_id_search').value.trim();
+                    const nome = document.getElementById('user_nome_edit').value.trim();
+                    const pontos = document.getElementById('user_pontos_edit').value;
+                    const acertosRaw = document.getElementById('user_acertos_edit').value;
+
+                    try {
+                        const acertos = JSON.parse(acertosRaw);
+                        const res = await fetch('/api/save-user-details', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ uid, nome, pontos, acertos })
+                        });
+                        const data = await res.json();
+                        if(data.ok) {
+                            mostrarAviso('✅ Perfil e acertos do usuário atualizados no KV!', true);
+                        } else {
+                            mostrarAviso('❌ Erro ao salvar.', false);
+                        }
+                    } catch(e) {
+                        alert('Formato do JSON de acertos inválido! Verifique a sintaxe.');
+                    }
+                }
+
+                async function vincularPostExistente() {
+                    const postId = document.getElementById('vincular_post_id').value.trim();
+                    const confronto = document.getElementById('vincular_confronto').value.trim();
+                    if(!postId) return alert('Digite o ID numérico da mensagem do post no canal!');
+
+                    const res = await fetch('/api/bolao-vincular', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ post_id: postId, confronto })
+                    });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('✅ Post ' + postId + ' vinculado e reativado com sucesso!', true);
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        mostrarAviso('❌ Erro ao vincular post.', false);
                     }
                 }
 
@@ -364,12 +462,87 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
+    // 👤 APIS DE EDIÇÃO INDIVIDUAL DO RANKING E ACERTOS
+    // ==========================================================
+    else if (url.pathname === "/api/get-user-details" && request.method === "GET") {
+        try {
+            let uid = url.searchParams.get("uid");
+            if(!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
+
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
+
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let names = namesRaw ? JSON.parse(namesRaw) : {};
+            let acertos = acertosRaw ? JSON.parse(acertosRaw) : [];
+
+            return new Response(JSON.stringify({
+                ok: true,
+                nome: names[uid] || "Torcedor",
+                pontos: Number(ranking[uid]) || 0,
+                acertos: acertos
+            }), { status: 200, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    else if (url.pathname === "/api/save-user-details" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            const { uid, nome, pontos, acertos } = body;
+
+            if(!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
+
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+
+            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let names = namesRaw ? JSON.parse(namesRaw) : {};
+
+            ranking[uid] = Number(pontos) || 0;
+            names[uid] = nome || "Torcedor";
+
+            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
+            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(names));
+            await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertos || []));
+
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    // ==========================================================
     // 🔄 ROTA DE AÇÕES WEB DO BOLÃO
     // ==========================================================
     else if (url.pathname === "/api/bolao-toggle" && request.method === "POST") {
         let st = url.searchParams.get("status") || "false";
         await env.GOLS_FLAMENGO_KV.put("bolao_aberto", st);
         return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+    }
+
+    else if (url.pathname === "/api/bolao-vincular" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            const postId = String(body.post_id || "").trim();
+            const confronto = String(body.confronto || "").trim();
+
+            if (!postId) return new Response(JSON.stringify({ ok: false, error: "post_id_missing" }), { status: 400, headers: headersCORS });
+
+            await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", postId);
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+
+            if (confronto) {
+                await env.GOLS_FLAMENGO_KV.put("confronto_atual", confronto);
+                await env.GOLS_FLAMENGO_KV.put("confronto_" + postId, confronto);
+            }
+
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
     }
 
     else if (url.pathname === "/api/bolao-vencedores-update" && request.method === "POST") {
@@ -1183,7 +1356,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // ⚙️ MOTOR DO BOLÃO (VALIADADOR DE PALPITES)
+    // ⚙️ MOTOR DO BOLÃO (VALIDADOR DE PALPITES DO TELEGRAM)
     // ==========================================================
     else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
         try {
