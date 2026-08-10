@@ -16,7 +16,9 @@ export async function processarRotaApi(request, env) {
         return new Response(null, { status: 204, headers: headersCORS });
     }
 
+    // ==========================================================
     // 📊 API 1: /api/ranking_api (Tabela Completa com Fotos e Nomes)
+    // ==========================================================
     if (url.pathname === "/api/ranking_api") {
         try {
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
@@ -43,7 +45,6 @@ export async function processarRotaApi(request, env) {
 
                 let finalPhotoUrl = cachedPhotoUrl || "";
 
-                // Tenta buscar a foto real no Telegram caso não esteja no cache
                 if (!finalPhotoUrl && botToken) {
                     try {
                         const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
@@ -62,19 +63,27 @@ export async function processarRotaApi(request, env) {
                     } catch (e) {}
                 }
 
-                // Fallback dinâmico com iniciais no estilo Rubro-Negro caso o usuário não tenha foto pública no Telegram
+                const sanitizarNome = (str) => {
+                    if (!str) return "Torcedor";
+                    return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
+                };
+
+                let nomeLimpo = sanitizarNome(nomes[id]);
+
                 if (!finalPhotoUrl) {
-                    const nomeUser = nomes[id] || "Torcedor";
-                    finalPhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nomeUser)}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
+                    finalPhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nomeLimpo)}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
                 }
+
+                let pontosCalculados = Number(ranking[id]) || 0;
+                let totalAcertos = acertos.length > 0 ? acertos.length : pontosCalculados;
 
                 return {
                     id: String(id),
                     uid: String(id),
-                    nome: nomes[id] || "Torcedor",
-                    name: nomes[id] || "Torcedor",
-                    pontos: Number(ranking[id]) || 0,
-                    total: acertos.length,
+                    nome: nomeLimpo,
+                    name: nomeLimpo,
+                    pontos: pontosCalculados,
+                    total: totalAcertos,
                     acertos: acertos,
                     photo_url: finalPhotoUrl,
                     photo_file_id: finalPhotoUrl
@@ -88,7 +97,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+    // ==========================================================
     // 👤 API 2: /api/ranking_user_public_api (Perfil Individual)
+    // ==========================================================
     else if (url.pathname === "/api/ranking_user_public_api") {
         try {
             let uid = url.searchParams.get("uid");
@@ -117,7 +128,391 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🖥️ PAINEL VISUAL: /api/painel-addgoal
+    // ==========================================================
+    // 🏆 PAINEL WEBAPP COMPLETO DO BOLÃO: /api/painel-bolao
+    // ==========================================================
+    else if (url.pathname === "/api/painel-bolao" && request.method === "GET") {
+        let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto") || "false";
+        let confrontoAtual = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Nenhum no momento";
+        let postAtivoId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || "Nenhum";
+        let vencedoresTemp = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+
+        const htmlBolao = `
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>🏆 Painel Geral do Bolão</title>
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+            <style>
+                :root {
+                    --bg-main: #0b0d10;
+                    --card-bg: rgba(22, 26, 33, 0.88);
+                    --border-color: rgba(255, 255, 255, 0.08);
+                    --accent-red: #dc2626;
+                    --accent-green: #16a34a;
+                    --accent-blue: #2563eb;
+                    --text-primary: #f8fafc;
+                    --text-muted: #94a3b8;
+                    --font-main: 'Plus Jakarta Sans', -apple-system, sans-serif;
+                    --font-code: 'JetBrains Mono', monospace;
+                }
+
+                body { 
+                    background-color: var(--bg-main); 
+                    background-image: radial-gradient(at 10% 20%, rgba(220, 38, 38, 0.1) 0px, transparent 50%),
+                                      radial-gradient(at 90% 80%, rgba(37, 99, 235, 0.08) 0px, transparent 50%);
+                    background-attachment: fixed;
+                    color: var(--text-primary); 
+                    font-family: var(--font-main); 
+                    padding: 20px 15px; 
+                    margin: 0; 
+                    display: flex; 
+                    justify-content: center; 
+                    -webkit-font-smoothing: antialiased;
+                }
+
+                .container { 
+                    width: 100%; 
+                    max-width: 640px; 
+                    background: var(--card-bg); 
+                    backdrop-filter: blur(16px);
+                    -webkit-backdrop-filter: blur(16px);
+                    border-radius: 24px; 
+                    padding: 28px; 
+                    border: 1px solid var(--border-color); 
+                    box-shadow: 0 30px 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1); 
+                    box-sizing: border-box; 
+                }
+
+                .header-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+                h1 { font-size: 24px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+                
+                .status-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 18px; padding: 18px; margin-bottom: 24px; }
+                .status-badge { display: inline-block; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+                .status-open { background: rgba(22, 163, 74, 0.2); color: #4ade80; border: 1px solid rgba(22, 163, 74, 0.4); }
+                .status-closed { background: rgba(220, 38, 38, 0.2); color: #f87171; border: 1px solid rgba(220, 38, 38, 0.4); }
+
+                .section-title { font-size: 14px; font-weight: 800; margin: 24px 0 12px 0; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+
+                .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+                label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+                input, textarea { 
+                    background: rgba(11, 13, 16, 0.8); 
+                    border: 1px solid var(--border-color); 
+                    border-radius: 12px; 
+                    padding: 13px 15px; 
+                    color: #fff; 
+                    font-size: 14px; 
+                    font-family: var(--font-main);
+                    outline: none; 
+                    width: 100%; 
+                    box-sizing: border-box; 
+                    transition: all 0.2s;
+                }
+                input:focus, textarea:focus { border-color: var(--accent-red); }
+                textarea { resize: vertical; min-height: 80px; }
+
+                .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+                .btn { border: 0; border-radius: 12px; padding: 14px; font-weight: 700; cursor: pointer; color: #fff; font-family: var(--font-main); transition: all 0.2s; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+                .btn:hover { opacity: 0.95; transform: translateY(-1px); }
+                .btn-green { background: var(--accent-green); }
+                .btn-red { background: var(--accent-red); }
+                .btn-blue { background: var(--accent-blue); width: 100%; }
+                .btn-purple { background: #7c3aed; width: 100%; }
+
+                .alert { padding: 14px; border-radius: 12px; font-size: 13px; font-weight: 600; display: none; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1); word-break: break-all; }
+                
+                .nav-links { display: flex; gap: 8px; }
+                .nav-link { color: #f87171; text-decoration: none; font-size: 13px; font-weight: 700; background: rgba(220, 38, 38, 0.1); padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(220, 38, 38, 0.2); }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header-flex">
+                    <h1>🏆 Gestor do Bolão</h1>
+                    <div class="nav-links">
+                        <a href="/api/painel-addgoal" class="nav-link">⚽ Gols</a>
+                        <a href="/api/lista-gols" class="nav-link" style="color:#cbd5e1; background:rgba(255,255,255,0.05); border-color:rgba(255,255,255,0.1);">📋 Acervo</a>
+                    </div>
+                </div>
+                
+                <div id="msgBox" class="alert"></div>
+
+                <div class="status-card">
+                    <div>Status dos Palpites: <span class="status-badge ${bolaoAberto === "true" ? "status-open" : "status-closed"}">${bolaoAberto === "true" ? "ABERTO" : "FECHADO"}</span></div>
+                    <div style="margin-top:10px; font-size:14px;"><strong>Partida / Confronto:</strong> <span style="color:#f4d03f; font-weight:700;">${confrontoAtual}</span></div>
+                    <div style="margin-top:6px; font-size:12px; color:var(--text-muted);"><strong>ID do Post Ativo no Canal:</strong> <code style="color:#f87171; font-family:var(--font-code);">${postAtivoId}</code></div>
+                </div>
+
+                <div class="section-title">⚡ Controle do Status do Bolão</div>
+                <div class="btn-group">
+                    <button class="btn btn-green" onclick="alterarStatus('true')">🔓 Abrir Palpites</button>
+                    <button class="btn btn-red" onclick="alterarStatus('false')">🔒 Bloquear Palpites</button>
+                </div>
+
+                <div class="section-title">🚀 1. Iniciar Novo Bolão no Canal</div>
+                <div class="field">
+                    <label>Confronto / Horário</label>
+                    <input type="text" id="init_confronto" placeholder="Ex: FLAMENGO X VASCO 21H00">
+                </div>
+                <div class="field">
+                    <label>FileID da Foto do Bolão</label>
+                    <input type="text" id="init_foto" placeholder="Cole o FileID longo da imagem">
+                </div>
+                <button class="btn btn-blue" onclick="iniciarBolaoWeb()">🚀 Publicar Postagem no Canal @Flamengo77</button>
+
+                <div class="section-title">🥇 2. Gerenciar Lista de Vencedores Salvos</div>
+                <div class="field">
+                    <label>Legenda dos Vencedores (Editável)</label>
+                    <textarea id="vencedores_texto" placeholder="Ex: 🥇 Torcedor 1 (Ver Palpite)...">${vencedoresTemp}</textarea>
+                </div>
+                <button class="btn btn-purple" onclick="salvarVencedoresManual()">💾 Gravar Vencedores no KV</button>
+
+                <div class="section-title">🏁 3. Encerrar Bolão e Postar Resultado</div>
+                <div class="field">
+                    <label>Placar Real do Jogo</label>
+                    <input type="text" id="encerrar_placar" placeholder="Ex: 2x1">
+                </div>
+                <div class="field">
+                    <label>FileID da Foto do Resultado (Opcional)</label>
+                    <input type="text" id="encerrar_foto" placeholder="Cole o FileID da imagem de encerramento">
+                </div>
+                <button class="btn btn-red" style="width:100%; margin-top:6px;" onclick="encerrarBolaoWeb()">🏁 Encerrar, Publicar Resultado e Sincronizar Ranking</button>
+            </div>
+
+            <script>
+                function mostrarAviso(txt, eSucesso) {
+                    const box = document.getElementById('msgBox');
+                    box.style.display = 'block';
+                    box.style.backgroundColor = eSucesso ? '#065f46' : '#991b1b';
+                    box.innerText = txt;
+                }
+
+                async function alterarStatus(st) {
+                    const res = await fetch('/api/bolao-toggle?status=' + st, { method: 'POST' });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('Status alterado com sucesso!', true);
+                        setTimeout(() => location.reload(), 800);
+                    }
+                }
+
+                async function iniciarBolaoWeb() {
+                    const confronto = document.getElementById('init_confronto').value.trim();
+                    const foto = document.getElementById('init_foto').value.trim();
+                    if(!confronto || !foto) return alert('Preencha o confronto e o FileID da foto!');
+
+                    mostrarAviso('Publicando bolão no canal...', true);
+                    const res = await fetch('/api/bolao-iniciar-web', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ confronto, foto })
+                    });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('✅ Bolão publicado no canal com sucesso! ID: ' + data.id, true);
+                        setTimeout(() => location.reload(), 1200);
+                    } else {
+                        mostrarAviso('❌ Erro: ' + (data.error || 'Falha ao publicar'), false);
+                    }
+                }
+
+                async function salvarVencedoresManual() {
+                    const texto = document.getElementById('vencedores_texto').value;
+                    const res = await fetch('/api/bolao-vencedores-update', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ texto })
+                    });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('✅ Lista de vencedores gravada!', true);
+                    } else {
+                        mostrarAviso('❌ Erro ao salvar.', false);
+                    }
+                }
+
+                async function encerrarBolaoWeb() {
+                    const placar = document.getElementById('encerrar_placar').value.trim();
+                    const foto = document.getElementById('encerrar_foto').value.trim();
+                    if(!placar) return alert('Digite o placar final do jogo!');
+
+                    mostrarAviso('Encerrando e processando ranking...', true);
+                    const res = await fetch('/api/bolao-encerrar-web', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ placar, foto })
+                    });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('✅ Bolão encerrado, postado no canal e ranking sincronizado na Vercel!', true);
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        mostrarAviso('❌ Erro: ' + (data.error || 'Falha ao encerrar'), false);
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        `;
+        return new Response(htmlBolao, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    // ==========================================================
+    // 🔄 ROTA DE AÇÕES WEB DO BOLÃO
+    // ==========================================================
+    else if (url.pathname === "/api/bolao-toggle" && request.method === "POST") {
+        let st = url.searchParams.get("status") || "false";
+        await env.GOLS_FLAMENGO_KV.put("bolao_aberto", st);
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+    }
+
+    else if (url.pathname === "/api/bolao-vencedores-update" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", body.texto || "");
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    else if (url.pathname === "/api/bolao-iniciar-web" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            const formatarTimes = (txt) => txt.toLowerCase().replace(/\b\w/g, (l) => l.toUpperCase());
+            let infoJogo = formatarTimes(body.confronto.trim());
+            let fotoId = body.foto.trim();
+
+            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+
+            let confrontoLimpo = infoJogo.replace(/\d{1,2}H\d{0,2}/gi, "").replace(/\d{1,2}:\d{2}/g, "").trim();
+            let partesTimes = confrontoLimpo.split(/\s+x\s+/i);
+            let timeCasa = partesTimes[0] ? partesTimes[0].trim() : "Time 1";
+            let timeFora = partesTimes[1] ? partesTimes[1].trim() : "Time 2";
+
+            let textoLegenda =
+                "🏟 <b>BOLÃO DO MENGÃO</b> 🔴⚫\n\n" +
+                "🔥 <b>PARTIDA:</b>\n<b>" + infoJogo + "</b>\n\n" +
+                "💬 <b>COMO PARTICIPAR:</b>\nClique em <b>“Escrever um comentário”</b> e envie seu palpite.\n\n" +
+                "<blockquote expandable>" +
+                "📌 <b>LEIA ANTES DE PALPITAR</b>\n\n" +
+                "O placar deve seguir exatamente a ordem da partida:\n<b>" + timeCasa + " X " + timeFora + "</b>\n\n" +
+                "Exemplos:\n• <b>2x1</b>\n• <b>1x1</b>\n\n" +
+                "⚠️ <b>REGRAS:</b> Apenas 1 palpite por usuário. Editou perde a validação. Palpites após o início não contam." +
+                "</blockquote>\n\n" +
+                "🏆 Vale <b>1 ponto</b> no ranking!";
+
+            await env.GOLS_FLAMENGO_KV.put("confronto_atual", infoJogo);
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+
+            const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: "@Flamengo77", photo: fotoId, caption: textoLegenda, parse_mode: "HTML" })
+            });
+
+            const dadosPostagem = await respostaCanal.json();
+            if (dadosPostagem.ok && dadosPostagem.result?.message_id) {
+                const canalMessageId = String(dadosPostagem.result.message_id);
+                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", canalMessageId);
+                await env.GOLS_FLAMENGO_KV.put("confronto_" + canalMessageId, infoJogo);
+                return new Response(JSON.stringify({ ok: true, id: canalMessageId }), { status: 200, headers: headersCORS });
+            }
+            return new Response(JSON.stringify({ ok: false, error: dadosPostagem.description || "Falha ao enviar para o canal" }), { status: 500, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    else if (url.pathname === "/api/bolao-encerrar-web" && request.method === "POST") {
+        try {
+            const body = await request.json();
+            let placar = body.placar.trim();
+            let fotoResultadoId = body.foto ? body.foto.trim() : "";
+            let msgIdOriginal = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+
+            if (!msgIdOriginal) {
+                return new Response(JSON.stringify({ ok: false, error: "Nenhum bolão ativo encontrado no KV." }), { status: 400, headers: headersCORS });
+            }
+
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + msgIdOriginal) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
+            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+
+            // 1. APURA OS PALPITES NO KV
+            let chaveListaGlobal = "palpites_" + msgIdOriginal;
+            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
+            let listaPalpites = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
+
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+
+            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
+
+            const sanitizarNome = (str) => {
+                if (!str) return "Torcedor";
+                return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
+            };
+
+            for (let uid in listaPalpites) {
+                let p = listaPalpites[uid];
+                if (String(p.palpite || "").toLowerCase().trim() === placar.toLowerCase().trim()) {
+                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
+                    rankingNames[uid] = sanitizarNome(p.nome);
+
+                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
+                    let acertosLista = acertosRaw ? JSON.parse(acertosRaw) : [];
+                    if (!Array.isArray(acertosLista)) acertosLista = [];
+                    
+                    let textoFormatado = `${confronto} -> ${placar}`;
+                    if (!acertosLista.includes(textoFormatado)) {
+                        acertosLista.push(textoFormatado);
+                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
+                    }
+                }
+            }
+
+            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
+            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
+
+            // 2. MONTA E PUBLICA A LEGENDA / FOTO NO CANAL
+            let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${confronto}</b>\n📊 Resultado: <b>${placar}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
+            let tecladoResgate = [[{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]];
+
+            if (fotoResultadoId) {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: "@Flamengo77", photo: fotoResultadoId, caption: legendaResultado, parse_mode: "HTML", reply_markup: { inline_keyboard: tecladoResgate } })
+                });
+            } else {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: "@Flamengo77", text: legendaResultado, reply_to_message_id: Number(msgIdOriginal), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: tecladoResgate } })
+                });
+            }
+
+            // 3. ENCERRA E LIMPA ESTADO
+            await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
+            await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
+            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
+        } catch(e) {
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    // ==========================================================
+    // 🖥️ PAINEL VISUAL DE GOLS COMPLETO: /api/painel-addgoal
+    // ==========================================================
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
         <!DOCTYPE html>
@@ -185,6 +580,7 @@ export async function processarRotaApi(request, env) {
 
                 p { color: var(--text-muted); margin: 0 0 20px 0; font-size: 14px; font-weight: 500; }
 
+                .nav-links { display: flex; gap: 8px; margin-bottom: 24px; }
                 .nav-link { 
                     display: inline-flex; 
                     align-items: center;
@@ -193,17 +589,13 @@ export async function processarRotaApi(request, env) {
                     font-size: 13px; 
                     font-weight: 700; 
                     text-decoration: none; 
-                    margin-bottom: 24px; 
                     padding: 8px 14px;
                     background: rgba(220, 38, 38, 0.1);
                     border: 1px solid rgba(220, 38, 38, 0.2);
                     border-radius: 12px;
                     transition: all 0.2s ease;
                 }
-                .nav-link:hover {
-                    background: rgba(220, 38, 38, 0.2);
-                    transform: translateY(-1px);
-                }
+                .nav-link:hover { background: rgba(220, 38, 38, 0.2); transform: translateY(-1px); }
 
                 .alert { padding: 14px; border-radius: 12px; margin-bottom: 20px; font-size: 14px; font-weight: 600; display: none; border: 1px solid rgba(255,255,255,0.1); word-break: break-all; }
 
@@ -304,7 +696,10 @@ export async function processarRotaApi(request, env) {
                 <h1 id="panelTitle">⚽ Adicionar Novo Gol</h1>
                 <p id="panelSubtitle">Preencha os campos abaixo para injetar no Banco KV.</p>
                 
-                <a href="/api/lista-gols" class="nav-link">📋 Ver Lista Completa de Gols</a>
+                <div class="nav-links">
+                    <a href="/api/lista-gols" class="nav-link">📋 Lista Completa</a>
+                    <a href="/api/painel-bolao" class="nav-link" style="color:#4ade80; background:rgba(22,163,74,0.1); border-color:rgba(22,163,74,0.2);">🏆 Gestor do Bolão</a>
+                </div>
                 
                 <div id="alertBox" class="alert"></div>
 
@@ -509,7 +904,9 @@ export async function processarRotaApi(request, env) {
         return new Response(htmlForm, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
-    // 📋 LISTA DE GOLS INTELIGENTE: /api/lista-gols
+    // ==========================================================
+    // 📋 LISTA DE GOLS COMPLETA (Tabela com Busca Global): /api/lista-gols
+    // ==========================================================
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
             let queryText = url.searchParams.get("q") || "";
@@ -781,11 +1178,13 @@ export async function processarRotaApi(request, env) {
             `;
             return new Response(htmlLista, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
         } catch (e) {
-            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
 
-    // ⚙️ MOTOR DO BOLÃO: /api/processar-bolao
+    // ==========================================================
+    // ⚙️ MOTOR DO BOLÃO (VALIADADOR DE PALPITES)
+    // ==========================================================
     else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
         try {
             const data = await request.json();
@@ -889,7 +1288,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+    // ==========================================================
     // 🗑️ ROTA DE AÇÃO: /api/deletegoal
+    // ==========================================================
     else if (url.pathname === "/api/deletegoal" && request.method === "DELETE") {
         try {
             const id = url.searchParams.get("id");
@@ -914,7 +1315,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+    // ==========================================================
     // 🔍 AUXILIAR DE BUSCA: /api/getgoal
+    // ==========================================================
     else if (url.pathname === "/api/getgoal" && request.method === "GET") {
         try {
             const id = url.searchParams.get("id");
@@ -927,7 +1330,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+    // ==========================================================
     // ⚡ AÇÃO INTEGRADA DA API: /api/addgoal-action
+    // ==========================================================
     else if (url.pathname === "/api/addgoal-action" && request.method === "POST") {
         try {
             const body = await request.json();
@@ -996,7 +1401,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
+    // ==========================================================
     // 🔄 ROTA MIGRATÓRIA: /api/importar-tudo
+    // ==========================================================
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
             const acervo = await request.json();
@@ -1014,7 +1421,9 @@ export async function processarRotaApi(request, env) {
         }
     }
 
-    // 🏆 APURAÇÃO DO BOLÃO: /api/apurar-bolao
+    // ==========================================================
+    // 🏆 APURAÇÃO DO BOLÃO VIA POST
+    // ==========================================================
     else if (url.pathname === "/api/apurar-bolao" && request.method === "POST") {
         try {
             const body = await request.json();
@@ -1035,27 +1444,43 @@ export async function processarRotaApi(request, env) {
 
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
+
             let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
             let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
 
             let ganhadoresId = [];
             let contagemGanhadores = 0;
 
+            const sanitizarNome = (str) => {
+                if (!str) return "Torcedor";
+                return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
+            };
+
             for (let uid in listaPalpites) {
                 let dadosTorcedor = listaPalpites[uid];
+                let palpiteUser = String(dadosTorcedor.palpite || "").toLowerCase().trim();
                 
-                if (dadosTorcedor.palpite === placarReal) {
+                if (palpiteUser === placarReal) {
                     ganhadoresId.push(uid);
                     contagemGanhadores++;
 
                     rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
-                    rankingNames[uid] = dadosTorcedor.nome || "Torcedor";
+                    rankingNames[uid] = sanitizarNome(dadosTorcedor.nome);
 
                     let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
-                    let acertosLista = acertosRaw ? JSON.parse(acertosRaw) : [];
-                    if (!Array.isArray(acertosLista)) acertosLista = [];
-                    if (!acertosLista.includes(postId)) {
-                        acertosLista.push(postId);
+                    let acertosLista = [];
+                    if (acertosRaw) {
+                        try {
+                            acertosLista = JSON.parse(acertosRaw);
+                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
+                            if (!Array.isArray(acertosLista)) acertosLista = [];
+                        } catch (e) { acertosLista = []; }
+                    }
+
+                    let textoFormatado = `${confronto} -> ${placarReal}`;
+                    if (!acertosLista.includes(textoFormatado)) {
+                        acertosLista.push(textoFormatado);
                         await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
                     }
                 }
