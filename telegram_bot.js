@@ -143,7 +143,12 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        const realName = `${userFirstName} ${userLastName}`.trim();
+        const sanitizarNome = (str) => {
+            if (!str) return "Torcedor";
+            return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
+        };
+
+        const realName = sanitizarNome(`${userFirstName} ${userLastName}`);
         const escHTML = (text) => String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         const mention = `<a href="tg://user?id=${userId}">${escHTML(realName)}</a>`;
 
@@ -358,20 +363,23 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             });
 
             const dadosPostagem = await respostaCanal.json();
-            if (dadosPostagem.ok) {
-                const canalMessageId = dadosPostagem.result.message_id;
-                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", String(canalMessageId));
+            if (dadosPostagem.ok && dadosPostagem.result?.message_id) {
+                const canalMessageId = String(dadosPostagem.result.message_id);
+                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", canalMessageId);
                 await env.GOLS_FLAMENGO_KV.put("confronto_" + canalMessageId, infoJogo);
+                await enviarMensagem(`✅ <b>Bolão iniciado com sucesso!</b>\n\n📌 <b>ID do Post no Canal:</b> <code>${canalMessageId}</code>`);
+            } else {
+                let erroMsg = dadosPostagem.description || "Erro desconhecido ao enviar foto no canal.";
+                await enviarMensagem(`❌ <b>Falha ao enviar postagem no canal @Flamengo77!</b>\n\n<code>${erroMsg}</code>`);
             }
 
-            await enviarMensagem("✅ <b>Bolão iniciado com sucesso!</b>");
             return new Response("OK", { status: 200 });
         }
 
         else if (texto.startsWith("/fechar_bolao")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
-            await enviarMensagem("⛔ <b>Bolão fechado!</b>");
+            await enviarMensagem("⛔ <b>Bolão fechado para novos palpites!</b>\n\n*(Aguardando encerramento da partida)*");
             return new Response("OK", { status: 200 });
         }
 
@@ -394,20 +402,23 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
-            let realNameVencedor = `${vencedor.first_name || ""} ${vencedor.last_name || ""}`.trim() || "Torcedor";
+            let realNameVencedor = sanitizarNome(`${vencedor.first_name || ""} ${vencedor.last_name || ""}`);
             let perfilLink = `<a href="tg://user?id=${vencedor.id}">${escHTML(realNameVencedor)}</a>`;
             let linkPalpite = ` <a href="https://t.me/c/${String(chatIdComentario).replace('-100', '')}/${msgIdComentario}">(Ver Palpite)</a>`;
             let entradaGanhador = `🥇 ${perfilLink}${linkPalpite}`;
 
+            // 1. Salva na lista temporária da legenda do encerramento
             let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
             let listaNova = listaAtual === "" ? entradaGanhador : listaAtual + "\n" + entradaGanhador;
             await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
 
+            // 2. Registra o ID para liberação no Deep Link
             let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postId);
             let listaIds = winnersRaw ? JSON.parse(winnersRaw) : [];
             if (!listaIds.includes(String(vencedor.id))) listaIds.push(String(vencedor.id));
             await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + postId, JSON.stringify(listaIds));
 
+            // 3. Incrementa o Ranking e salva o nome limpo
             let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
             ranking[vencedor.id] = (Number(ranking[vencedor.id]) || 0) + 1;
@@ -417,6 +428,23 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let names = namesRaw ? JSON.parse(namesRaw) : {};
             names[vencedor.id] = realNameVencedor;
             await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(names));
+
+            // 4. Salva a entrada detalhada do jogo no KV na chave acertos_USERID
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
+            let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + vencedor.id);
+            let acertosLista = [];
+            if (acertosRaw) {
+                try {
+                    acertosLista = JSON.parse(acertosRaw);
+                    if (typeof acertosLista === "string") acertosLista = [acertosLista];
+                    if (!Array.isArray(acertosLista)) acertosLista = [];
+                } catch (e) { acertosLista = []; }
+            }
+
+            if (!acertosLista.includes(confronto)) {
+                acertosLista.push(confronto);
+                await env.GOLS_FLAMENGO_KV.put("acertos_" + vencedor.id, JSON.stringify(acertosLista));
+            }
 
             await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -460,7 +488,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 console.error("Erro ao integrar com a API de apuração:", errApi.message);
             }
 
-            // 2. Grava os dados do encerramento para o Bot
+            // 2. Grava os dados do encerramento
             await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
             await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
@@ -515,10 +543,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         else if (texto.startsWith("/addgoal")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
             const tecladoWebApp = [
+                [{ text: "🏆 Gestor do Bolão WebApp", web_app: { url: "https://lucky-bar-5077.futvert.workers.dev/api/painel-bolao" } }],
                 [{ text: "➕ Adicionar / Editar Gol", web_app: { url: "https://lucky-bar-5077.futvert.workers.dev/api/painel-addgoal" } }],
                 [{ text: "📋 Ver / Buscar na Lista Completa", web_app: { url: "https://lucky-bar-5077.futvert.workers.dev/api/lista-gols" } }]
             ];
-            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, text: "⚙️ <b>PAINEL ADMINISTRATIVO DE GOLS</b>", parse_mode: "HTML", reply_markup: { inline_keyboard: tecladoWebApp } }) });
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, text: "⚙️ <b>PAINEL DE CONTROLE FLAMENGO GOLS</b>", parse_mode: "HTML", reply_markup: { inline_keyboard: tecladoWebApp } }) });
             return new Response("OK", { status: 200 });
         }
 
