@@ -607,70 +607,27 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-                       // ==========================================================
-        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS EM LOTE PARALELO (SUPER RÁPIDO)
+                // ==========================================================
+        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS EM PAGINAÇÃO INTERATIVA (5 EM 5)
         // ==========================================================
         else if (texto === "/atualizar_fotos") {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
-            await enviarMensagem("⚡ <b>Iniciando sincronização rápida de fotos...</b>");
-
-            const buscarEFotografar = async () => {
-                let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-                let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-                let ids = Object.keys(ranking);
-
-                let atualizados = 0;
-                let semFotoOuFechada = 0;
-
-                // Processa os 43 torcedores em blocos paralelos de 5 em 5
-                const TAMANHO_BLOCO = 5;
-                for (let i = 0; i < ids.length; i += TAMANHO_BLOCO) {
-                    const bloco = ids.slice(i, i + TAMANHO_BLOCO);
-
-                    await Promise.all(bloco.map(async (id) => {
-                        try {
-                            const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
-                            const photosData = await photosRes.json();
-
-                            if (photosData.ok && photosData.result?.photos?.length > 0) {
-                                const fileId = photosData.result.photos[0][0].file_id;
-                                const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-                                const fileData = await fileRes.json();
-
-                                if (fileData.ok && fileData.result?.file_path) {
-                                    const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                                    
-                                    await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
-                                    await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
-                                    atualizados++;
-                                } else {
-                                    semFotoOuFechada++;
-                                }
-                            } else {
-                                semFotoOuFechada++;
-                            }
-                        } catch (err) {
-                            semFotoOuFechada++;
-                        }
-                    }));
-                }
-
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        chat_id: chatId,
-                        text: `✅ <b>Sincronização Rápida Concluída!</b>\n\n🖼 Fotos salvas/atualizadas: <b>${atualizados}</b>\n👤 Sem foto pública: <b>${semFotoOuFechada}</b>\n📊 Total de torcedores: <b>${ids.length}</b>`,
-                        parse_mode: "HTML"
-                    })
-                });
-            };
-
-            buscarEFotografar();
-
+            // Inicia o processo a partir do offset 0
+            await processarLoteFotos(0, chatId, env, botToken, false);
             return new Response("OK", { status: 200 });
         }
+
+        // 🔘 MANIPULADOR DO BOTÃO "CONTINUAR"
+        else if (texto.startsWith("fotos_page_")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+            await responderCallback("Processando lote...");
+
+            let offset = parseInt(texto.replace("fotos_page_", "")) || 0;
+            await processarLoteFotos(offset, chatId, env, botToken, true, mensagem.message_id);
+            return new Response("OK", { status: 200 });
+        }
+
 
             
         // ==========================================================
