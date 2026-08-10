@@ -607,16 +607,15 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-               // ==========================================================
-        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS DE PERFIL (ASSÍNCRONO)
+                       // ==========================================================
+        // 📸 COMANDO ADMIN: ATUALIZAR FOTOS EM LOTE PARALELO (SUPER RÁPIDO)
         // ==========================================================
         else if (texto === "/atualizar_fotos") {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
-            await enviarMensagem("🔄 <b>Iniciando varredura das fotos de perfil em segundo plano...</b>\n\nIsso pode levar alguns minutos. Você receberá um aviso ao concluir.");
+            await enviarMensagem("⚡ <b>Iniciando sincronização rápida de fotos...</b>");
 
-            // Executa o processamento em segundo plano sem estourar o timeout da mensagem
-            const processarFotosEmLote = async () => {
+            const buscarEFotografar = async () => {
                 let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
                 let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
                 let ids = Object.keys(ranking);
@@ -624,50 +623,51 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let atualizados = 0;
                 let semFotoOuFechada = 0;
 
-                for (let id of ids) {
-                    try {
-                        const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
-                        const photosData = await photosRes.json();
+                // Processa os 43 torcedores em blocos paralelos de 5 em 5
+                const TAMANHO_BLOCO = 5;
+                for (let i = 0; i < ids.length; i += TAMANHO_BLOCO) {
+                    const bloco = ids.slice(i, i + TAMANHO_BLOCO);
 
-                        if (photosData.ok && photosData.result?.photos?.length > 0) {
-                            const fileId = photosData.result.photos[0][0].file_id;
-                            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-                            const fileData = await fileRes.json();
+                    await Promise.all(bloco.map(async (id) => {
+                        try {
+                            const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+                            const photosData = await photosRes.json();
 
-                            if (fileData.ok && fileData.result?.file_path) {
-                                const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                                
-                                await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
-                                await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
-                                atualizados++;
+                            if (photosData.ok && photosData.result?.photos?.length > 0) {
+                                const fileId = photosData.result.photos[0][0].file_id;
+                                const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+                                const fileData = await fileRes.json();
+
+                                if (fileData.ok && fileData.result?.file_path) {
+                                    const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                                    
+                                    await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
+                                    await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
+                                    atualizados++;
+                                } else {
+                                    semFotoOuFechada++;
+                                }
                             } else {
                                 semFotoOuFechada++;
                             }
-                        } else {
+                        } catch (err) {
                             semFotoOuFechada++;
                         }
-                    } catch (err) {
-                        semFotoOuFechada++;
-                    }
-                    
-                    // Pequena pausa para evitar tomar bloqueio por limite de taxa da API do Telegram
-                    await new Promise(r => setTimeout(r, 100));
+                    }));
                 }
 
-                // Envia a mensagem de conclusão diretamente no chat quando terminar
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         chat_id: chatId,
-                        text: `✅ <b>Atualização de Fotos Concluída!</b>\n\n🖼 Fotos salvas: <b>${atualizados}</b>\n👤 Sem foto pública: <b>${semFotoOuFechada}</b>\n📊 Total verificado: <b>${ids.length}</b>`,
+                        text: `✅ <b>Sincronização Rápida Concluída!</b>\n\n🖼 Fotos salvas/atualizadas: <b>${atualizados}</b>\n👤 Sem foto pública: <b>${semFotoOuFechada}</b>\n📊 Total de torcedores: <b>${ids.length}</b>`,
                         parse_mode: "HTML"
                     })
                 });
             };
 
-            // Dispara a promessa em segundo plano
-            processarFotosEmLote();
+            buscarEFotografar();
 
             return new Response("OK", { status: 200 });
         }
