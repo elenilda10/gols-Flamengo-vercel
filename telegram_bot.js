@@ -1,4 +1,91 @@
 // ==========================================================
+// ⚙️ FUNÇÃO AUXILIAR: PROCESSA FOTOS EM LOTES DE 5 POR CLIQUE
+// ==========================================================
+async function processarLoteFotos(offset, chatId, env, botToken, eEdicao = false, messageId = null) {
+    let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+    let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+    let ids = Object.keys(ranking);
+    let total = ids.length;
+
+    const TAMANHO_LOTE = 5;
+    let lote = ids.slice(offset, offset + TAMANHO_LOTE);
+
+    let atualizadosNoLote = 0;
+    let semFotoNoLote = 0;
+
+    await Promise.all(lote.map(async (id) => {
+        try {
+            const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+            const photosData = await photosRes.json();
+
+            if (photosData.ok && photosData.result?.photos?.length > 0) {
+                const fileId = photosData.result.photos[0][0].file_id;
+                const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+                const fileData = await fileRes.json();
+
+                if (fileData.ok && fileData.result?.file_path) {
+                    const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                    await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
+                    await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
+                    atualizadosNoLote++;
+                } else {
+                    semFotoNoLote++;
+                }
+            } else {
+                semFotoNoLote++;
+            }
+        } catch (e) {
+            semFotoNoLote++;
+        }
+    }));
+
+    let proximoOffset = offset + TAMANHO_LOTE;
+    let concluido = proximoOffset >= total;
+    let progressoAtual = Math.min(proximoOffset, total);
+
+    let textoResposta = 
+        `🖼 <b>SINCRONIZAÇÃO DE FOTOS (${progressoAtual}/${total})</b>\n\n` +
+        `• Lote atual: <code>${offset + 1}</code> até <code>${progressoAtual}</code>\n` +
+        `• Com foto registrada: <b>${atualizadosNoLote}</b>\n` +
+        `• Sem foto pública: <b>${semFotoNoLote}</b>\n\n` +
+        (concluido 
+            ? `🎉 <b>Processamento de todos os ${total} torcedores concluído com sucesso!</b>` 
+            : `👉 Clique no botão abaixo para processar os próximos 5 torcedores.`);
+
+    let teclado = null;
+    if (!concluido) {
+        teclado = [
+            [{ text: `▶️ Continuar (${progressoAtual + 1} ao ${Math.min(progressoAtual + 5, total)})`, callback_data: `fotos_page_${proximoOffset}` }]
+        ];
+    }
+
+    if (eEdicao && messageId) {
+        await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                chat_id: chatId,
+                message_id: messageId,
+                text: textoResposta,
+                parse_mode: "HTML",
+                reply_markup: teclado ? { inline_keyboard: teclado } : undefined
+            })
+        });
+    } else {
+        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: textoResposta,
+                parse_mode: "HTML",
+                reply_markup: teclado ? { inline_keyboard: teclado } : undefined
+            })
+        });
+    }
+}
+
+// ==========================================================
 // 📥 FLUXO PRINCIPAL DO TELEGRAM
 // ==========================================================
 export async function processarMensagemTelegram(request, env, botTokenPassado) {
@@ -607,13 +694,12 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-                // ==========================================================
+        // ==========================================================
         // 📸 COMANDO ADMIN: ATUALIZAR FOTOS EM PAGINAÇÃO INTERATIVA (5 EM 5)
         // ==========================================================
         else if (texto === "/atualizar_fotos") {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
-            // Inicia o processo a partir do offset 0
             await processarLoteFotos(0, chatId, env, botToken, false);
             return new Response("OK", { status: 200 });
         }
@@ -628,8 +714,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-
-            
         // ==========================================================
         // ⚽ CAPTURAR PALPITES APENAS NOS COMENTÁRIOS DO BOLÃO E REAGIR COM 👍
         // ==========================================================
