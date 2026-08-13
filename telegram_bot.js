@@ -230,14 +230,20 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
+        // 🛡️ SANITIZAÇÃO DE NOMES COM SUPORTE A SIMBOLOS DE HTML (<, > e &)
         const sanitizarNome = (str) => {
             if (!str) return "Torcedor";
-            return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "")
+                .trim() || "Torcedor";
         };
 
         const realName = sanitizarNome(`${userFirstName} ${userLastName}`);
         const escHTML = (text) => String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const mention = `<a href="tg://user?id=${userId}">${escHTML(realName)}</a>`;
+        const mention = `<a href="tg://user?id=${userId}">${realName}</a>`;
 
         const enviarMensagem = async (textoResposta, teclado = null) => {
             let body = { chat_id: chatId, text: textoResposta, parse_mode: "HTML", disable_web_page_preview: true };
@@ -499,7 +505,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
             let textoPrevia = 
                 `🎯 <b>CONFIRMAR VENCEDOR DO BOLÃO?</b>\n\n` +
-                `👤 <b>Torcedor:</b> <a href="tg://user?id=${vencedor.id}">${escHTML(realNameVencedor)}</a> (ID: <code>${vencedor.id}</code>)\n` +
+                `👤 <b>Torcedor:</b> <a href="tg://user?id=${vencedor.id}">${realNameVencedor}</a> (ID: <code>${vencedor.id}</code>)\n` +
                 `🏟 <b>Confronto:</b> ${escHTML(confronto)}\n` +
                 `📌 <b>Palpite:</b> <code>${palpiteExibido}</code>\n\n` +
                 `<i>Confirme se deseja adicionar +1 ponto ao ranking e registrar a vitória.</i>`;
@@ -534,7 +540,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let userData = await userTargetInfo.json();
             let realNameVencedor = sanitizarNome(`${userData.result?.user?.first_name || ""} ${userData.result?.user?.last_name || ""}`);
             
-            let perfilLink = `<a href="tg://user?id=${targetUserId}">${escHTML(realNameVencedor)}</a>`;
+            let perfilLink = `<a href="tg://user?id=${targetUserId}">${realNameVencedor}</a>`;
             let linkPalpite = ` <a href="https://t.me/c/${String(chatId).replace('-100', '')}/${msgIdComentario}">(Ver Palpite)</a>`;
             let entradaGanhador = `🥇 ${perfilLink}${linkPalpite}`;
 
@@ -647,7 +653,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 }
             }
 
-            // Grava alterações no ranking e IDs dos ganhadores para resgate
             await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
             await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
             await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
@@ -675,7 +680,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 });
             }
 
-            // Limpa dados temporários do estado ativo
             await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
             await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
 
