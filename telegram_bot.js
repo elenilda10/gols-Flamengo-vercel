@@ -320,7 +320,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         if (texto.startsWith("/start") || texto === "menu_principal") {
             if (isCallback && texto !== "menu_principal") await responderCallback();
 
-            // 🎯 PROCESSAMENTO DO DEEP LINK DE RESGATE (/start resgatar_ID)
+            // 🎯 1. SE FOR O DEEP LINK DE RESGATE (/start resgatar_ID)
             if (texto.startsWith("/start resgatar_")) {
                 let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
@@ -370,6 +370,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
+            // 🏠 2. SE FOR O /start PADRÃO OU RETORNO AO MENU PRINCIPAL
             const textosMenu = {
                 pt: "👋 Olá " + realName + ", seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: " + totalUsers,
                 en: "👋 Hello " + realName + ", welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: " + totalUsers,
@@ -391,6 +392,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
             if (isCallback) await editarMensagem(textosMenu[lang], tecladoMenu);
             else await enviarMensagem(textosMenu[lang], tecladoMenu);
+            return new Response("OK", { status: 200 });
         }
 
         else if (texto === "/ajuda" || texto === "/help" || texto === "/ayuda") {
@@ -586,6 +588,9 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
+        // ==========================================================
+        // 🏁 COMANDO /encerrar_bolao (APURAÇÃO DIRETA NO CLOUDFLARE WORKER)
+        // ==========================================================
         else if (texto.startsWith("/encerrar_bolao")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
@@ -599,32 +604,62 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Jogo";
-            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + msgIdOriginal) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
 
-            // 1. APURAÇÃO AUTOMÁTICA DO RANKING GLOBAL (Sincronização com Vercel/Site)
-            try {
-                const urlWorker = new URL(request.url);
-                const apuracaoUrl = `${urlWorker.origin}/api/apurar-bolao`;
+            // 1. APURAÇÃO INTERNA DIRETA DOS PALPITES NO KV
+            let chaveListaGlobal = "palpites_" + msgIdOriginal;
+            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
+            let listaPalpites = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
 
-                await fetch(apuracaoUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        admin_id: "7717528550",
-                        post_id: msgIdOriginal,
-                        placar_real: placar
-                    })
-                });
-            } catch (errApi) {
-                console.error("Erro ao integrar com a API de apuração:", errApi.message);
+            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+
+            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
+            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
+
+            let vencedoresIds = [];
+
+            for (let uid in listaPalpites) {
+                let p = listaPalpites[uid];
+                let palpiteUser = String(p.palpite || "").toLowerCase().trim();
+
+                if (palpiteUser === placar.toLowerCase().trim()) {
+                    vencedoresIds.push(uid);
+
+                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
+                    rankingNames[uid] = sanitizarNome(p.nome);
+
+                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
+                    let acertosLista = [];
+                    if (acertosRaw) {
+                        try {
+                            acertosLista = JSON.parse(acertosRaw);
+                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
+                            if (!Array.isArray(acertosLista)) acertosLista = [];
+                        } catch (e) { acertosLista = []; }
+                    }
+
+                    let textoFormatado = `${confronto} -> ${placar}`;
+                    if (!acertosLista.includes(textoFormatado)) {
+                        acertosLista.push(textoFormatado);
+                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
+                    }
+                }
             }
 
-            // 2. Grava os dados do encerramento
+            // Grava alterações no ranking e IDs dos ganhadores para resgate
+            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
+            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
+            await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
+
+            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+
+            // 2. GRAVA RESULTADOS E FECHA PALPITES
             await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
             await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
             await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
 
+            // 3. PUBLICA NO CANAL
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${escHTML(confronto)}</b>\n📊 Resultado: <b>${escHTML(placar)}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
             let tecladoResgate = [[{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]];
 
@@ -640,10 +675,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 });
             }
 
+            // Limpa dados temporários do estado ativo
             await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
             await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
 
-            await enviarMensagem("✅ <b>Bolão encerrado e pontos contabilizados no ranking com sucesso!</b>");
+            await enviarMensagem("✅ <b>Bolão encerrado, apuração executada e ranking atualizado no banco!</b>");
             return new Response("OK", { status: 200 });
         }
 
