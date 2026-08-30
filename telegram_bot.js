@@ -138,7 +138,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const texts = {
                 pt: { search_title: "🔍 Buscar Gols", search_desc: "Digite jogador, time ou campeonato", search_msg: "🔍 <b>BUSCA DE GOLS ⚽</b>\n\nDigite palavras-chave como:\n• Pedro\n• Flamengo\n• Libertadores\n• Brasileirão\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Digite: <code>Flamengo</code>", list_title: "📋 Lista completa de gols", list_desc: "Clique para ver todos os gols do Flamengo", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os gols:\n👉 Digite: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os gols", btn_all_query: "Flamengo" },
                 en: { search_title: "🔍 Search Goals", search_desc: "Type player, team or competition", search_msg: "🔍 <b>GOALS SEARCH ⚽</b>\n\nType keywords like:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>To see all goals:</b>\n👉 Type: <code>Flamengo</code>", list_title: "📋 Full goals list", list_desc: "Click to see all Flamengo goals", list_msg: "📋 <b>FULL LIST ⚽</b>\n\nTo see all goals:\n👉 Type: <code>Flamengo</code>", btn_search: "🔎 Search", btn_all: "📋 View all goals", btn_all_query: "Flamengo" },
-                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos os goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
+                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos os goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos os goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
             };
             const t = (k) => texts[lang][k];
 
@@ -294,7 +294,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const textosSuporte = {
                 pt: `🛠 <b>Suporte ao Usuário</b>\n\nPrecisa de ajuda ou encontrou algum problema?\n\n👉 Entre em contato diretamente com o nosso administrador clicando no botão abaixo ou envie uma mensagem para o suporte oficial.`,
                 en: `🛠 <b>User Support</b>\n\nNeed help or found a bug?\n\n👉 Contact our administrator directly by clicking the button below or send a message to the official support.`,
-                es: `🛠 <b>Soporte de Usuario</b>\n\n¿Necesitas ayuda o encontraste um error?\n\n👉 Contacta directamente com nuestro administrador haciendo clic en el botão de abajo o envía un mensaje al soporte oficial.`
+                es: `🛠 <b>Soporte de Usuario</b>\n\n¿Necesitas ajuda o encontraste um error?\n\n👉 Contacta directamente com nuestro administrador haciendo clic en el botão de abajo o envía un mensaje al soporte oficial.`
             };
             const botoesSuporte = {
                 pt: { contato: "💬 Falar com Suporte", voltar: "🔙 Voltar" },
@@ -322,8 +322,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
                 
-                let confronto = (await getConfig(env.DB, "confronto_" + postagemId)) || (await getConfig(env.DB, "confronto_atual")) || "Partida não informada";
-                let resultadoOficial = (await getConfig(env.DB, "resultado_oficial_" + postagemId)) || "Resultado ainda não informado";
+                let confronto = (await getConfig(env.DB, "confronto_" + postagemId)) || (await getConfig(env.DB, "confronto_atual")) || "Flamengo";
+                let resultadoOficial = (await getConfig(env.DB, "resultado_oficial_" + postagemId)) || "Resultado Oficial";
                 let encerradoEm = Number(await getConfig(env.DB, "bolao_encerrado_em_" + postagemId)) || 0;
                 
                 let umaHora = 60 * 60 * 1000;
@@ -348,11 +348,13 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     await setConfig(env.DB, chaveResgateConcluido, "true");
                     await env.DB.prepare("UPDATE usuarios SET pontos = pontos + 1 WHERE id = ?").bind(userId).run();
 
+                    let placarFinal = meuPalpiteRow?.palpite || resultadoOficial;
+
                     await env.DB.prepare(`
                         INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
                         VALUES (?, ?, ?, ?, 1, ?)
-                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
-                    `).bind(postagemId, userId, confronto, resultadoOficial, Date.now()).run();
+                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET confronto = excluded.confronto, placar = excluded.placar, resgatado = 1, resgatado_em = excluded.resgatado_em
+                    `).bind(postagemId, userId, confronto, placarFinal, Date.now()).run();
                     
                     const userAtualizado = await env.DB.prepare("SELECT pontos FROM usuarios WHERE id = ?").bind(userId).first();
                     const acertos = userAtualizado?.pontos || 1;
@@ -541,7 +543,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const targetUser = targetMsg.from;
             const textoPalpite = String(targetMsg.text || targetMsg.caption || "");
 
-            // Regex flexível para capturar 3x1, 3 X 1, 3-1, 3 a 1, etc.
             const match = textoPalpite.match(/(\d+)\s*(?:x|X|×|-|a)\s*(\d+)/i);
             if (!match) {
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -728,19 +729,24 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             }
 
             let realNameVencedor = sanitizarNome(`${vencedor.first_name || ""} ${vencedor.last_name || ""}`);
-            let palpiteExibido = escHTML(replyTo.text || replyTo.caption || "Palpite do Jogo");
-            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
+            let textoPalpiteComentario = replyTo.text || replyTo.caption || "";
+            
+            // Extrai o placar cravado pelo torcedor
+            let matchPlacar = textoPalpiteComentario.match(/(\d+)\s*(?:x|X|×|-|a)\s*(\d+)/i);
+            let placarIdentificado = matchPlacar ? `${matchPlacar[1]}x${matchPlacar[2]}`.toLowerCase() : "Cravado";
+
+            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "Flamengo";
 
             let textoPrevia = 
                 `🎯 <b>CONFIRMAR VENCEDOR DO BOLÃO?</b>\n\n` +
                 `👤 <b>Torcedor:</b> <a href="tg://user?id=${vencedor.id}">${realNameVencedor}</a> (ID: <code>${vencedor.id}</code>)\n` +
                 `🏟 <b>Confronto:</b> ${escHTML(confronto)}\n` +
-                `📌 <b>Palpite:</b> <code>${palpiteExibido}</code>\n\n` +
+                `📌 <b>Palpite Cravado:</b> <code>${placarIdentificado}</code>\n\n` +
                 `<i>Confirme se deseja adicionar +1 ponto ao ranking e registrar a vitória.</i>`;
 
             let tecladoConfirmacao = [
                 [
-                    { text: "✅ Confirmar e Adicionar Ponto", callback_data: `confirm_ganhou_${vencedor.id}_${msgIdComentario}` },
+                    { text: "✅ Confirmar e Adicionar Ponto", callback_data: `confirm_ganhou_${vencedor.id}_${msgIdComentario}_${placarIdentificado}` },
                     { text: "❌ Cancelar", callback_data: "cancel_ganhou" }
                 ]
             ];
@@ -761,9 +767,10 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let partes = texto.replace("confirm_ganhou_", "").split("_");
             let targetUserId = Number(partes[0]);
             let msgIdComentario = partes[1];
+            let placarCravado = partes[2] || "Cravado";
 
-            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID")) || "bolao_manual";
-            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID")) || ("bolao_" + Date.now());
+            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "Flamengo";
             
             // Busca nome do banco local ou via API com fallback
             let userDb = await env.DB.prepare("SELECT nome FROM usuarios WHERE id = ?").bind(targetUserId).first();
@@ -795,27 +802,28 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             if (!listaIds.includes(String(targetUserId))) listaIds.push(String(targetUserId));
             await setConfig(env.DB, "vencedores_ids_" + postId, JSON.stringify(listaIds));
 
-            // 3. Atualiza Pontos e Registra Acerto no D1
+            // 3. Atualiza Pontos do Usuário
             await env.DB.prepare(`
                 INSERT INTO usuarios (id, nome, pontos, criado_em) 
                 VALUES (?, ?, 1, ?)
-                ON CONFLICT(id) DO UPDATE SET pontos = pontos + 1, nome = ?
-            `).bind(targetUserId, realNameVencedor, Date.now(), realNameVencedor).run();
+                ON CONFLICT(id) DO UPDATE SET pontos = pontos + 1, nome = excluded.nome
+            `).bind(targetUserId, realNameVencedor, Date.now()).run();
 
+            // 4. Registra Acerto com o Nome do Jogo e Placar Real
             await env.DB.prepare(`
                 INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
-                VALUES (?, ?, ?, 'Acerto Confirmado', 1, ?)
-                ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
-            `).bind(postId, targetUserId, confronto, Date.now()).run();
+                VALUES (?, ?, ?, ?, 1, ?)
+                ON CONFLICT(postagem_id, user_id) DO UPDATE SET confronto = excluded.confronto, placar = excluded.placar, resgatado = 1, resgatado_em = excluded.resgatado_em
+            `).bind(postId, targetUserId, confronto, placarCravado, Date.now()).run();
 
-            // 4. Edita a mensagem removendo os botões de confirmação
+            // 5. Edita a mensagem removendo os botões de confirmação
             await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     chat_id: chatId,
                     message_id: mensagem.message_id,
-                    text: `🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado ao ranking e acertos registrados!`,
+                    text: `🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n⚽ Placar: <code>${placarCravado}</code>\n➕ 1 ponto adicionado ao ranking e acerto registrado com sucesso!`,
                     parse_mode: "HTML",
                     disable_web_page_preview: true
                 })
@@ -869,7 +877,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     await env.DB.prepare(`
                         INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
                         VALUES (?, ?, ?, ?, 1, ?)
-                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET confronto = excluded.confronto, placar = excluded.placar, resgatado = 1, resgatado_em = excluded.resgatado_em
                     `).bind(msgIdOriginal, Number(vId), confronto, placar, Date.now()).run();
                 }
             }
@@ -995,22 +1003,18 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                         const replyTo = mensagem.reply_to_message;
                         const threadId = mensagem.message_thread_id;
 
-                        // Se o post no canal gerou um post espelho no grupo, ele vincula automaticamente
                         let postGrupoId = await getConfig(env.DB, "post_grupo_id_" + postId);
 
-                        // Se a mensagem que está sendo respondida é um encaminhamento automático do canal com o ID do bolão
                         const eEncaminhamentoDoBolao = replyTo && (
                             String(replyTo.forward_from_message_id) === String(postId) ||
                             (replyTo.forward_origin && String(replyTo.forward_origin.message_id) === String(postId))
                         );
 
-                        // Se a resposta está dentro do ID do post que chegou no grupo
                         if (eEncaminhamentoDoBolao && replyTo.message_id && !postGrupoId) {
                             postGrupoId = String(replyTo.message_id);
                             await setConfig(env.DB, "post_grupo_id_" + postId, postGrupoId);
                         }
 
-                        // Validação estrita: responde ao post do canal, ao post do grupo ou à thread correspondente
                         const eComentarioDoBolao = Boolean(
                             eEncaminhamentoDoBolao ||
                             (postGrupoId && replyTo && String(replyTo.message_id) === String(postGrupoId)) ||
