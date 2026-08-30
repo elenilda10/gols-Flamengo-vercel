@@ -33,148 +33,111 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🚀 ROTA AUTOMÁTICA DE MIGRAÇÃO: /api/migrar-tudo
+    // 🚀 ROTA DE MIGRAÇÃO EM LOTES (SEM ESTOURAR SUBREQUESTS)
     // ==========================================================
     if (url.pathname === "/api/migrar-tudo" && request.method === "GET") {
         try {
-            let relatorio = {
-                gols: 0,
-                usuarios: 0,
-                acertos: 0,
-                configuracoes: 0,
-                erros: []
-            };
+            const cursor = url.searchParams.get("cursor") || "";
+            const tipo = url.searchParams.get("tipo") || "acertos"; // "acertos", "resgates" ou "usuarios"
+            
+            let prefixo = "acertos_";
+            if (tipo === "resgates") prefixo = "resgate_concluido_";
+            if (tipo === "usuarios") prefixo = "user_";
 
-            // 1. Migração de Gols
-            let golsChaves = [];
-            let cursorGols = "";
-            while (true) {
-                let lista = await env.GOLS_FLAMENGO_KV.list({ prefix: "gol_", limit: 1000, cursor: cursorGols });
-                golsChaves.push(...lista.keys.map(k => k.name));
-                if (lista.list_complete || !lista.cursor) break;
-                cursorGols = lista.cursor;
-            }
+            const lista = await env.GOLS_FLAMENGO_KV.list({ prefix: prefixo, limit: 30, cursor: cursor || undefined });
+            const chaves = lista.keys.map(k => k.name);
 
-            for (const chave of golsChaves) {
+            let processados = 0;
+            let statements = [];
+
+            for (const chave of chaves) {
                 try {
-                    const raw = await env.GOLS_FLAMENGO_KV.get(chave);
-                    if (!raw) continue;
-                    const gol = JSON.parse(raw);
-                    const id = String(gol.id || chave.replace("gol_", ""));
+                    if (tipo === "resgates") {
+                        const partes = chave.replace("resgate_concluido_", "").split("_");
+                        const postId = partes[0];
+                        const uid = Number(partes[1]);
+                        if (postId && uid > 0) {
+                            statements.push(
+                                env.DB.prepare(`
+                                    INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                                    VALUES (?, ?, 'Bolão Oficial', 'Acerto Confirmado', 1, ?)
+                                `).bind(postId, uid, Date.now())
+                            );
+                            processados++;
+                        }
+                    } else if (tipo === "usuarios") {
+                        const uid = Number(chave.replace("user_", ""));
+                        if (uid > 0) {
+                            const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uid}`)) || "pt";
+                            statements.push(
+                                env.DB.prepare(`
+                                    INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
+                                    VALUES (?, 'Torcedor', ?, 0, ?)
+                                    ON CONFLICT(id) DO UPDATE SET idioma = excluded.idioma
+                                `).bind(uid, lang, Date.now())
+                            );
+                            processados++;
+                        }
+                    } else {
+                        const raw = await env.GOLS_FLAMENGO_KV.get(chave);
+                        if (!raw) continue;
 
-                    await env.DB.prepare(`
-                        INSERT INTO gols (id, file_id, jogo, autor, assistencia, campeonato, fase, criado_em)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            file_id = excluded.file_id,
-                            jogo = excluded.jogo,
-                            autor = excluded.autor,
-                            assistencia = excluded.assistencia,
-                            campeonato = excluded.campeonato,
-                            fase = excluded.fase
-                    `).bind(
-                        id,
-                        gol.file_id || "",
-                        gol.jogo || "",
-                        gol.autor || "",
-                        gol.assistencia || "",
-                        gol.campeonato || "",
-                        gol.fase || gol.rodada || "",
-                        Number(gol.created_at) || Date.now()
-                    ).run();
-                    relatorio.gols++;
-                } catch (e) {
-                    relatorio.erros.push(`Erro no gol ${chave}: ${e.message}`);
-                }
-            }
+                        if (chave.startsWith("acertos_total_")) {
+                            const uid = Number(chave.replace("acertos_total_", ""));
+                            const totalPontos = Number(raw) || 0;
+                            if (uid > 0 && totalPontos > 0) {
+                                statements.push(
+                                    env.DB.prepare(`
+                                        INSERT INTO usuarios (id, nome, pontos, criado_em)
+                                        VALUES (?, 'Torcedor', ?, ?)
+                                        ON CONFLICT(id) DO UPDATE SET pontos = MAX(usuarios.pontos, excluded.pontos)
+                                    `).bind(uid, totalPontos, Date.now())
+                                );
+                                processados++;
+                            }
+                        } else {
+                            const uid = Number(chave.replace("acertos_", ""));
+                            if (uid > 0) {
+                                let itens = [];
+                                try {
+                                    itens = JSON.parse(raw);
+                                    if (typeof itens === "string") itens = [itens];
+                                    if (!Array.isArray(itens)) itens = [];
+                                } catch (e) {
+                                    itens = [raw];
+                                }
 
-            // 2. Migração de Todos os Usuários (Ativos e do Ranking)
-            const rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            const namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-            const ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            const names = namesRaw ? JSON.parse(namesRaw) : {};
+                                for (const item of itens) {
+                                    const partes = String(item).split("->");
+                                    const confronto = partes[0]?.trim() || String(item);
+                                    const placar = partes[1]?.trim() || "Placar Correto";
 
-            let chavesUsers = [];
-            let cursorUsers = "";
-            while (true) {
-                let lista = await env.GOLS_FLAMENGO_KV.list({ prefix: "user_", limit: 1000, cursor: cursorUsers });
-                chavesUsers.push(...lista.keys.map(k => k.name.replace("user_", "")));
-                if (lista.list_complete || !lista.cursor) break;
-                cursorUsers = lista.cursor;
-            }
-
-            const todosUids = [...new Set([...chavesUsers, ...Object.keys(ranking)])];
-
-            for (const uidStr of todosUids) {
-                try {
-                    const userIdNum = Number(uidStr);
-                    if (isNaN(userIdNum) || userIdNum <= 0) continue;
-
-                    const nome = names[uidStr] || "Torcedor";
-                    const pontos = Number(ranking[uidStr]) || 0;
-                    const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uidStr}`)) || "pt";
-                    const fotoUrl = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_url_${uidStr}`)) || null;
-                    const fotoFileId = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_file_id_${uidStr}`)) || null;
-
-                    await env.DB.prepare(`
-                        INSERT INTO usuarios (id, nome, idioma, pontos, foto_url, foto_file_id, criado_em)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            nome = CASE WHEN excluded.nome != 'Torcedor' THEN excluded.nome ELSE usuarios.nome END,
-                            pontos = CASE WHEN excluded.pontos > 0 THEN excluded.pontos ELSE usuarios.pontos END,
-                            idioma = excluded.idioma,
-                            foto_url = COALESCE(excluded.foto_url, usuarios.foto_url),
-                            foto_file_id = COALESCE(excluded.foto_file_id, usuarios.foto_file_id)
-                    `).bind(
-                        userIdNum,
-                        nome,
-                        lang,
-                        pontos,
-                        fotoUrl,
-                        fotoFileId,
-                        Date.now()
-                    ).run();
-                    relatorio.usuarios++;
-
-                    // 3. Migração de Acertos
-                    const acertosRaw = await env.GOLS_FLAMENGO_KV.get(`acertos_${uidStr}`);
-                    if (acertosRaw) {
-                        try {
-                            let acertosLista = JSON.parse(acertosRaw);
-                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
-                            if (Array.isArray(acertosLista)) {
-                                for (const acertoTexto of acertosLista) {
-                                    await env.DB.prepare(`
-                                        INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
-                                        VALUES (?, ?, ?, ?, 1, ?)
-                                    `).bind(
-                                        "legado_" + Math.random().toString(36).substring(2, 8),
-                                        userIdNum,
-                                        String(acertoTexto),
-                                        "Acerto Registrado",
-                                        Date.now()
-                                    ).run();
-                                    relatorio.acertos++;
+                                    statements.push(
+                                        env.DB.prepare(`
+                                            INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                                            VALUES (?, ?, ?, ?, 1, ?)
+                                        `).bind("migrado_" + Math.random().toString(36).substring(2, 9), uid, confronto, placar, Date.now())
+                                    );
+                                    processados++;
                                 }
                             }
-                        } catch (e) {}
+                        }
                     }
-                } catch (e) {
-                    relatorio.erros.push(`Erro no usuario ${uidStr}: ${e.message}`);
-                }
+                } catch (e) {}
             }
 
-            // 4. Migração de Configurações do Bolão
-            const chavesConfigs = ["bolao_aberto", "confronto_atual", "postagem_ativa_id", "vencedores_temporarios"];
-            for (const k of chavesConfigs) {
-                const v = await env.GOLS_FLAMENGO_KV.get(k);
-                if (v !== null && v !== undefined) {
-                    await setConfig(env.DB, k, String(v));
-                    relatorio.configuracoes++;
-                }
+            if (statements.length > 0) {
+                await env.DB.batch(statements);
             }
 
-            return new Response(JSON.stringify({ ok: true, relatorio }), { status: 200, headers: headersCORS });
+            return new Response(JSON.stringify({
+                ok: true,
+                tipo: tipo,
+                processados_neste_lote: processados,
+                concluido: lista.list_complete,
+                proximo_cursor: lista.cursor || null
+            }), { status: 200, headers: headersCORS });
+
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
@@ -274,7 +237,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🏆 PAINEL WEBAPP COMPLETO DO BOLÃO: /api/painel-bolao
+    // 🏆 PAINEL WEBAPP DO BOLÃO: /api/painel-bolao
     // ==========================================================
     else if (url.pathname === "/api/painel-bolao" && request.method === "GET") {
         let bolaoAberto = (await getConfig(env.DB, "bolao_aberto")) || "false";
@@ -790,7 +753,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🖥️ PAINEL VISUAL DE GOLS COMPLETO: /api/painel-addgoal
+    // 🖥️ PAINEL VISUAL DE GOLS: /api/painel-addgoal
     // ==========================================================
     else if (url.pathname === "/api/painel-addgoal" && request.method === "GET") {
         const htmlForm = `
@@ -1184,7 +1147,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 📋 LISTA DE GOLS COMPLETA: /api/lista-gols
+    // 📋 LISTA DE GOLS COMPLETA (ORDEM CORRETA DO MAIS NOVO PRO MAIS ANTIGO)
     // ==========================================================
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
@@ -1196,13 +1159,13 @@ export async function processarRotaApi(request, env) {
                 const { results } = await env.DB.prepare(`
                     SELECT * FROM gols 
                     WHERE jogo LIKE ? OR autor LIKE ? OR assistencia LIKE ? OR campeonato LIKE ? OR fase LIKE ?
-                    ORDER BY criado_em DESC
+                    ORDER BY CAST(criado_em AS INTEGER) DESC, CAST(id AS INTEGER) DESC
                 `).bind(searchParam, searchParam, searchParam, searchParam, searchParam).all();
                 gols = results;
             } else {
                 const { results } = await env.DB.prepare(`
                     SELECT * FROM gols 
-                    ORDER BY criado_em DESC 
+                    ORDER BY CAST(criado_em AS INTEGER) DESC, CAST(id AS INTEGER) DESC 
                     LIMIT 30
                 `).all();
                 gols = results;
