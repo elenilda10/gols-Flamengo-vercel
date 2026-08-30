@@ -2,16 +2,16 @@
 // ⚙️ HELPERS PARA TABELA DE CONFIGURAÇÕES (D1)
 // ==========================================================
 async function getConfig(db, chave) {
-  const row = await db.prepare("SELECT valor FROM config WHERE chave = ?").bind(chave).first();
-  return row ? row.valor : null;
+    const row = await db.prepare("SELECT valor FROM config WHERE chave = ?").bind(chave).first();
+    return row ? row.valor : null;
 }
 
 async function setConfig(db, chave, valor) {
-  await db.prepare("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)").bind(chave, String(valor)).run();
+    await db.prepare("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)").bind(chave, String(valor)).run();
 }
 
 async function deleteConfig(db, chave) {
-  await db.prepare("DELETE FROM config WHERE chave = ?").bind(chave).run();
+    await db.prepare("DELETE FROM config WHERE chave = ?").bind(chave).run();
 }
 
 // ==========================================================
@@ -46,6 +46,7 @@ async function processarLoteFotos(offset, chatId, env, botToken, eEdicao = false
                     const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
                     await setConfig(env.DB, `profile_photo_url_${u.id}`, photoUrl);
                     await setConfig(env.DB, `profile_photo_file_id_${u.id}`, fileId);
+                    await env.DB.prepare("UPDATE usuarios SET foto_url = ?, foto_file_id = ? WHERE id = ?").bind(photoUrl, fileId, u.id).run();
                     atualizadosNoLote++;
                 } else {
                     semFotoNoLote++;
@@ -114,7 +115,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         const update = await request.json();
 
         // ==========================================================
-        // ⚡ MODO INLINE QUERY (Busca de Gols via D1 SQL)
+        // ⚡ MODO INLINE QUERY (Busca com Ordenação do Mais Recente ao Mais Antigo)
         // ==========================================================
         if (update.inline_query) {
             const inlineQuery = update.inline_query;
@@ -171,7 +172,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const { results: golsDb } = await env.DB.prepare(`
                 SELECT * FROM gols 
                 WHERE jogo LIKE ? OR autor LIKE ? OR assistencia LIKE ? OR campeonato LIKE ? OR fase LIKE ?
-                ORDER BY criado_em DESC 
+                ORDER BY CAST(criado_em AS INTEGER) DESC, CAST(id AS INTEGER) DESC 
                 LIMIT ? OFFSET ?
             `).bind(querySql, querySql, querySql, querySql, querySql, MAX_RESULTS, offset).all();
 
@@ -261,6 +262,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
                 VALUES (?, ?, ?, 0, ?)
             `).bind(userId, realName, lang, Date.now()).run();
+        } else if (userRaw.nome !== realName && realName !== "Torcedor") {
+            await env.DB.prepare("UPDATE usuarios SET nome = ? WHERE id = ?").bind(realName, userId).run();
         }
 
         const totalUsersRow = await env.DB.prepare("SELECT COUNT(*) as total FROM usuarios").first();
@@ -344,6 +347,12 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 if (ganhou) {
                     await setConfig(env.DB, chaveResgateConcluido, "true");
                     await env.DB.prepare("UPDATE usuarios SET pontos = pontos + 1 WHERE id = ?").bind(userId).run();
+
+                    await env.DB.prepare(`
+                        INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                        VALUES (?, ?, ?, ?, 1, ?)
+                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+                    `).bind(postagemId, userId, confronto, resultadoOficial, Date.now()).run();
                     
                     const userAtualizado = await env.DB.prepare("SELECT pontos FROM usuarios WHERE id = ?").bind(userId).first();
                     const acertos = userAtualizado?.pontos || 1;
@@ -447,6 +456,11 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 const canalMessageId = String(dadosPostagem.result.message_id);
                 await setConfig(env.DB, "postagem_ativa_id", canalMessageId);
                 await setConfig(env.DB, "confronto_" + canalMessageId, infoJogo);
+                await env.DB.prepare(`
+                    INSERT INTO boloes (postagem_id, confronto, criado_em)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto
+                `).bind(canalMessageId, infoJogo, Date.now()).run();
                 await enviarMensagem(`✅ <b>Bolão iniciado com sucesso!</b>\n\n📌 <b>ID do Post no Canal:</b> <code>${canalMessageId}</code>`);
             } else {
                 let erroMsg = dadosPostagem.description || "Erro desconhecido ao enviar foto no canal.";
@@ -520,6 +534,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let msgIdComentario = partes[1];
 
             let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
+            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
             
             let userTargetInfo = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${targetUserId}`);
             let userData = await userTargetInfo.json();
@@ -540,12 +555,20 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             if (!listaIds.includes(String(targetUserId))) listaIds.push(String(targetUserId));
             await setConfig(env.DB, "vencedores_ids_" + postId, JSON.stringify(listaIds));
 
-            // 3. Atualiza Pontos no D1
+            // 3. Atualiza Pontos e Registra Acerto no D1
             await env.DB.prepare(`
                 INSERT INTO usuarios (id, nome, pontos, criado_em) 
                 VALUES (?, ?, 1, ?)
                 ON CONFLICT(id) DO UPDATE SET pontos = pontos + 1, nome = ?
             `).bind(targetUserId, realNameVencedor, Date.now(), realNameVencedor).run();
+
+            if (postId) {
+                await env.DB.prepare(`
+                    INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                    VALUES (?, ?, ?, 'Acerto Confirmado', 1, ?)
+                    ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+                `).bind(postId, targetUserId, confronto, Date.now()).run();
+            }
 
             await editarMensagem(`🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado ao ranking e acertos registrados!`);
             return new Response("OK", { status: 200 });
@@ -591,6 +614,14 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     SET pontos = pontos + 1 
                     WHERE id IN (${placeholders})
                 `).bind(...vencedoresIds).run();
+
+                for (const vId of vencedoresIds) {
+                    await env.DB.prepare(`
+                        INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                        VALUES (?, ?, ?, ?, 1, ?)
+                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+                    `).bind(msgIdOriginal, Number(vId), confronto, placar, Date.now()).run();
+                }
             }
 
             await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
@@ -600,6 +631,12 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             await setConfig(env.DB, "resultado_oficial_" + msgIdOriginal, placar);
             await setConfig(env.DB, "bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
             await setConfig(env.DB, "bolao_aberto", "false");
+
+            await env.DB.prepare(`
+                INSERT INTO boloes (postagem_id, confronto, criado_em)
+                VALUES (?, ?, ?)
+                ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto
+            `).bind(msgIdOriginal, confronto, Date.now()).run();
 
             // 3. PUBLICA NO CANAL
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${escHTML(confronto)}</b>\n📊 Resultado: <b>${escHTML(placar)}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
