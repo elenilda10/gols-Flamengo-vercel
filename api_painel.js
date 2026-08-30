@@ -138,7 +138,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 📊 API 1: /api/ranking_api (Tabela Completa com Fotos e Nomes)
+    // 📊 API 1: /api/ranking_api (Tabela Completa com Fotos, Nomes e Acertos)
     // ==========================================================
     else if (url.pathname === "/api/ranking_api") {
         try {
@@ -182,6 +182,15 @@ export async function processarRotaApi(request, env) {
                     finalPhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nomeLimpo)}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
                 }
 
+                const { results: userAcertos } = await env.DB.prepare(`
+                    SELECT confronto, placar, resgatado_em 
+                    FROM acertos 
+                    WHERE user_id = ? 
+                    ORDER BY CAST(resgatado_em AS INTEGER) DESC
+                `).bind(u.id).all();
+
+                const listaFormatadaAcertos = userAcertos.map(a => `${a.confronto} -> ${a.placar}`);
+
                 return {
                     id: uid,
                     uid: uid,
@@ -189,7 +198,8 @@ export async function processarRotaApi(request, env) {
                     name: nomeLimpo,
                     pontos: u.pontos,
                     total: u.pontos,
-                    acertos: [],
+                    acertos: listaFormatadaAcertos,
+                    historico_acertos: userAcertos,
                     photo_url: finalPhotoUrl,
                     photo_file_id: finalPhotoUrl
                 };
@@ -202,15 +212,15 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 👤 API 2: /api/ranking_user_public_api (Perfil Individual)
+    // 👤 API 2: /api/ranking_user_public_api (Perfil Individual com Acertos)
     // ==========================================================
     else if (url.pathname === "/api/ranking_user_public_api") {
         try {
-            let uid = url.searchParams.get("uid");
+            let uid = url.searchParams.get("uid") || url.searchParams.get("id");
             if (!uid) return new Response(JSON.stringify({ ok: false, error: "uid_missing" }), { status: 400, headers: headersCORS });
             uid = Number(uid);
 
-            const user = await env.DB.prepare("SELECT id, nome, pontos FROM usuarios WHERE id = ?").bind(uid).first();
+            const user = await env.DB.prepare("SELECT id, nome, pontos, foto_url FROM usuarios WHERE id = ?").bind(uid).first();
             if (!user) {
                 return new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 404, headers: headersCORS });
             }
@@ -218,12 +228,31 @@ export async function processarRotaApi(request, env) {
             const posicaoRow = await env.DB.prepare("SELECT COUNT(*) + 1 as pos FROM usuarios WHERE pontos > ?").bind(user.pontos).first();
             const posicao = posicaoRow?.pos || 1;
 
+            const { results: userAcertos } = await env.DB.prepare(`
+                SELECT confronto, placar, resgatado_em 
+                FROM acertos 
+                WHERE user_id = ? 
+                ORDER BY CAST(resgatado_em AS INTEGER) DESC
+            `).bind(uid).all();
+
+            const listaFormatadaAcertos = userAcertos.map(a => `${a.confronto} -> ${a.placar}`);
+
+            let photoUrl = user.foto_url || "";
+            if (!photoUrl) {
+                photoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.nome || "Torcedor")}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
+            }
+
             return new Response(JSON.stringify({ 
                 ok: true, 
                 uid: String(user.id), 
+                id: String(user.id),
                 nome: user.nome || "Torcedor", 
                 pontos: user.pontos || 0, 
-                posicao: posicao 
+                total: user.pontos || 0,
+                posicao: posicao,
+                acertos: listaFormatadaAcertos,
+                historico: userAcertos,
+                photo_url: photoUrl
             }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
@@ -711,6 +740,14 @@ export async function processarRotaApi(request, env) {
                     SET pontos = pontos + 1 
                     WHERE id IN (${placeholders})
                 `).bind(...vencedoresIds).run();
+
+                for (const vId of vencedoresIds) {
+                    await env.DB.prepare(`
+                        INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                        VALUES (?, ?, ?, ?, 1, ?)
+                        ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+                    `).bind(msgIdOriginal, Number(vId), confronto, placar, Date.now()).run();
+                }
             }
 
             await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
