@@ -504,14 +504,14 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-                    // ==========================================================
+                            // ==========================================================
         // 📌 COMANDO ADMIN: ATRELAR PALPITE MANUALMENTE (/salvar)
         // ==========================================================
         else if (texto.startsWith("/salvar") || texto.startsWith("/palpite")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
             if (!update.message?.reply_to_message) {
-                await enviarMensagem("❌ Responda à mensagem do torcedor com <code>/salvar</code> para registrar o palpite.");
+                await enviarMensagem("❌ Responde à mensagem do torcedor com <code>/salvar</code> para registar o palpite.");
                 return new Response("OK", { status: 200 });
             }
 
@@ -534,14 +534,14 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const placarLimpo = match[0].toLowerCase().replace(/\s+/g, "");
             const nomeTorcedor = sanitizarNome(`${targetUser.first_name || ""} ${targetUser.last_name || ""}`);
 
-            // Garante que o usuário existe na tabela de usuários
+            // 1. Garante o registo do utilizador na tabela
             await env.DB.prepare(`
                 INSERT INTO usuarios (id, nome, pontos, criado_em)
                 VALUES (?, ?, 0, ?)
                 ON CONFLICT(id) DO UPDATE SET nome = excluded.nome
             `).bind(targetUser.id, nomeTorcedor, Date.now()).run();
 
-            // Grava o palpite atrelado ao ID da postagem ativa
+            // 2. Grava/atualiza o palpite no D1 atrelado ao post ativo
             await env.DB.prepare(`
                 INSERT INTO palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
                 VALUES (?, ?, ?, ?, ?, 1, ?)
@@ -552,9 +552,10 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     reagido = 1
             `).bind(postId, targetUser.id, placarLimpo, targetMsg.message_id, chatId, Date.now()).run();
 
-            // Reage ao comentário do torcedor com 👍
+            // 3. Tenta reagir com 👍 na mensagem do utilizador
+            let erroReacao = null;
             try {
-                await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                const res = await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -564,11 +565,15 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                         is_big: false
                     })
                 });
+                const resData = await res.json();
+                if (!resData.ok) {
+                    erroReacao = resData.description;
+                }
             } catch (e) {
-                console.error("Erro ao reagir no palpite:", e.message);
+                erroReacao = e.message;
             }
 
-            // Apaga a mensagem do comando /salvar
+            // 4. Apaga a mensagem do comando /salvar no grupo
             try {
                 await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
                     method: "POST",
@@ -577,9 +582,36 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 });
             } catch (e) {}
 
+            // 5. Envia mensagem de confirmação para o teu privado (PV)
+            try {
+                let msgPv = `✅ <b>Palpite Registado com Sucesso!</b>\n\n` +
+                            `👤 <b>Utilizador:</b> ${nomeTorcedor} (<code>${targetUser.id}</code>)\n` +
+                            `⚽ <b>Palpite:</b> <code>${placarLimpo}</code>\n` +
+                            `📌 <b>ID Postagem:</b> <code>${postId}</code>\n` +
+                            `💬 <b>ID Mensagem:</b> <code>${targetMsg.message_id}</code>`;
+
+                if (erroReacao) {
+                    msgPv += `\n\n⚠️ <i>Aviso: A reação 👍 falhou (${erroReacao}). Verifica se o bot é admin no grupo com permissão para reagir.</i>`;
+                } else {
+                    msgPv += `\n👍 <b>Reação aplicada:</b> Sim`;
+                }
+
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "7717528550",
+                        text: msgPv,
+                        parse_mode: "HTML"
+                    })
+                });
+            } catch (e) {
+                console.error("Erro ao enviar confirmação para o PV:", e.message);
+            }
+
             return new Response("OK", { status: 200 });
         }
-            
+
         // ==========================================================
         // 🔐 DEMAIS COMANDOS DE ADMINISTRAÇÃO E BOLÃO
         // ==========================================================
