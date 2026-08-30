@@ -115,7 +115,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         const update = await request.json();
 
         // ==========================================================
-        // ⚡ MODO INLINE QUERY (Busca com Ordenação do Mais Recente ao Mais Antigo)
+        // ⚡ MODO INLINE QUERY (Ordenação Recente > Antigo no D1)
         // ==========================================================
         if (update.inline_query) {
             const inlineQuery = update.inline_query;
@@ -399,10 +399,109 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const textosAjuda = {
                 pt: "🆘 <b>Central de Ajuda - Flamengo Gols Bot</b>\n\nBem-vindo ao bot oficial de gols do Flamengo! 🔴⚫\n\n🚀 <b>Como usar no modo inline</b>\nVocê pode buscar gols direto em qualquer chat, grupo ou conversa, sem precisar abrir o bot.\n\n<b>Passo a passo:</b>\n1️⃣ Vá para qualquer grupo\n2️⃣ Digite: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Escolha o resultado e envie! 🎥🔥",
                 en: "🆘 <b>Help Center - Flamengo Goals Bot</b>\n\nWelcome to the official Flamengo goals bot! 🔴⚫\n\n🚀 <b>How to use inline mode</b>\nSearch goals directly in any chat without opening the bot.\n\n<b>Step by step:</b>\n1️⃣ Go to any group\n2️⃣ Type: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ Choose the result and send! 🎥🔥",
-                es: "🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de gols del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en qualquer chat sin abrir el bot.\n\n<b>Paso a passo:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado y envía! 🎥🔥"
+                es: "🆘 <b>Centro de Ayuda - Flamengo Goles Bot</b>\n\n¡Bienvenido al bot oficial de gols del Flamengo! 🔴⚫\n\n🚀 <b>Cómo usar el modo inline</b>\nBusca goles directamente en qualquer chat sin abrir el bot.\n\n<b>Paso a passo:</b>\n1️⃣ Ve a cualquier grupo\n2️⃣ Escribe: <code>@FlamengoGolsBot Flamengo</code>\n3️⃣ ¡Elige el resultado e envía! 🎥🔥"
             };
             const tecladoAjuda = [[{ text: lang === "pt" ? "🔙 Voltar" : lang === "en" ? "🔙 Back" : "🔙 Volver", callback_data: "menu_principal" }]];
             await enviarMensagem(textosAjuda[lang], tecladoAjuda);
+        }
+
+        // ==========================================================
+        // ⚡ COMANDO ADMIN: REAGIR A UMA MENSAGEM ESPECÍFICA (/reagir [emoji])
+        // ==========================================================
+        else if (texto.startsWith("/reagir") && !texto.startsWith("/reagir_pendentes")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+            if (!update.message?.reply_to_message) {
+                await enviarMensagem("❌ Use o comando <code>/reagir</code> <b>respondendo</b> à mensagem que deseja reagir.");
+                return new Response("OK", { status: 200 });
+            }
+
+            const targetMsgId = update.message.reply_to_message.message_id;
+            let emojiEscolhido = texto.replace(/^\/reagir/, "").trim() || "👍";
+
+            try {
+                await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        message_id: targetMsgId,
+                        reaction: [{ type: "emoji", emoji: emojiEscolhido }],
+                        is_big: false
+                    })
+                });
+
+                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
+                });
+            } catch (e) {
+                console.error("Erro ao aplicar reação:", e.message);
+            }
+
+            return new Response("OK", { status: 200 });
+        }
+
+        // ==========================================================
+        // 🔄 COMANDO ADMIN: REAGIR A TODOS OS PALPITES PENDENTES DO BOLÃO
+        // ==========================================================
+        else if (texto.startsWith("/reagir_pendentes")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
+            if (!postId) {
+                await enviarMensagem("❌ Nenhum bolão ativo encontrado no momento.");
+                return new Response("OK", { status: 200 });
+            }
+
+            let emojiEscolhido = texto.replace(/^\/reagir_pendentes/, "").trim() || "👍";
+
+            const { results: palpitesSemReacao } = await env.DB.prepare(`
+                SELECT user_id, mensagem_id, chat_id FROM palpites 
+                WHERE postagem_id = ? AND mensagem_id IS NOT NULL AND (reagido IS NULL OR reagido = 0)
+                LIMIT 50
+            `).bind(postId).all();
+
+            if (!palpitesSemReacao || palpitesSemReacao.length === 0) {
+                await enviarMensagem("ℹ️ Todos os palpites cadastrados já receberam reação!");
+                return new Response("OK", { status: 200 });
+            }
+
+            let reagidosCount = 0;
+            for (const p of palpitesSemReacao) {
+                try {
+                    const targetChat = p.chat_id || chatId;
+                    const res = await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            chat_id: targetChat,
+                            message_id: p.mensagem_id,
+                            reaction: [{ type: "emoji", emoji: emojiEscolhido }],
+                            is_big: false
+                        })
+                    });
+                    const resData = await res.json();
+                    if (resData.ok) {
+                        await env.DB.prepare("UPDATE palpites SET reagido = 1 WHERE postagem_id = ? AND user_id = ?").bind(postId, p.user_id).run();
+                        reagidosCount++;
+                    }
+                } catch (e) {
+                    console.error("Erro ao reagir em pendente:", e.message);
+                }
+            }
+
+            try {
+                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
+                });
+            } catch (e) {}
+
+            await enviarMensagem(`✅ Reação <b>${emojiEscolhido}</b> aplicada a <b>${reagidosCount}</b> palpite(s) pendente(s)!`);
+            return new Response("OK", { status: 200 });
         }
 
         // ==========================================================
@@ -730,7 +829,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // ⚽ CAPTURA DE PALPITES NO CANAL/GRUPO (SALVA DIRETO NO D1)
+        // ⚽ CAPTURA AUTOMÁTICA DE PALPITES NO CANAL/GRUPO (SALVA NO D1 E REAGE)
         // ==========================================================
         else if (texto) {
             const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
@@ -743,20 +842,26 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
                     if (postId) {
                         const replyTo = mensagem.reply_to_message;
+                        const threadId = mensagem.message_thread_id;
 
-                        const eComentarioDoBolao = replyTo && (
-                            String(replyTo.message_id) === String(postId) ||
-                            String(replyTo.forward_from_message_id) === String(postId)
+                        // Valida se o comentário responde ao post ativo no canal/grupo de discussão
+                        const eComentarioDoBolao = Boolean(
+                            (replyTo && (
+                                String(replyTo.message_id) === String(postId) ||
+                                String(replyTo.forward_from_message_id) === String(postId) ||
+                                String(replyTo.forward_origin?.message_id) === String(postId)
+                            )) ||
+                            (threadId && String(threadId) === String(postId)) ||
+                            (replyTo && replyTo.is_automatic_forward)
                         );
 
                         if (eComentarioDoBolao) {
-                            await env.DB.prepare(`
-                                INSERT INTO palpites (postagem_id, user_id, palpite, criado_em)
-                                VALUES (?, ?, ?, ?)
-                            `).bind(postId, userId, texto.trim(), Date.now()).run();
+                            const match = texto.match(/\d+\s*(?:x|X|×|-|a)\s*\d+/i);
+                            const placarLimpo = match ? match[0].toLowerCase().replace(/\s+/g, "") : texto.trim();
 
+                            let reagiuOk = 0;
                             try {
-                                await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                                const reactRes = await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
                                     method: "POST",
                                     headers: { "Content-Type": "application/json" },
                                     body: JSON.stringify({
@@ -766,7 +871,22 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                                         is_big: false
                                     })
                                 });
-                            } catch (e) {}
+                                const reactJson = await reactRes.json();
+                                if (reactJson.ok) reagiuOk = 1;
+                            } catch (e) {
+                                console.error("Erro ao reagir:", e.message);
+                            }
+
+                            // Grava palpite com rastreio de mensagem para /reagir_pendentes
+                            await env.DB.prepare(`
+                                INSERT INTO palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(postagem_id, user_id) DO UPDATE SET 
+                                    palpite = excluded.palpite,
+                                    mensagem_id = excluded.mensagem_id,
+                                    chat_id = excluded.chat_id,
+                                    reagido = excluded.reagido
+                            `).bind(postId, userId, placarLimpo, mensagem.message_id, chatId, reagiuOk, Date.now()).run();
                         }
                     }
                 }
