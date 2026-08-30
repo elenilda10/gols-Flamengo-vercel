@@ -762,15 +762,26 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let targetUserId = Number(partes[0]);
             let msgIdComentario = partes[1];
 
-            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID")) || "bolao_manual";
             let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
             
-            let userTargetInfo = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${targetUserId}`);
-            let userData = await userTargetInfo.json();
-            let realNameVencedor = sanitizarNome(`${userData.result?.user?.first_name || ""} ${userData.result?.user?.last_name || ""}`);
-            
+            // Busca nome do banco local ou via API com fallback
+            let userDb = await env.DB.prepare("SELECT nome FROM usuarios WHERE id = ?").bind(targetUserId).first();
+            let realNameVencedor = userDb?.nome;
+
+            if (!realNameVencedor) {
+                try {
+                    let userTargetInfo = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${targetUserId}`);
+                    let userData = await userTargetInfo.json();
+                    realNameVencedor = sanitizarNome(`${userData.result?.user?.first_name || ""} ${userData.result?.user?.last_name || ""}`);
+                } catch (e) {
+                    realNameVencedor = "Torcedor";
+                }
+            }
+
             let perfilLink = `<a href="tg://user?id=${targetUserId}">${realNameVencedor}</a>`;
-            let linkPalpite = ` <a href="https://t.me/c/${String(chatId).replace('-100', '')}/${msgIdComentario}">(Ver Palpite)</a>`;
+            let chatIdLimpo = String(chatId).replace("-100", "");
+            let linkPalpite = ` <a href="https://t.me/c/${chatIdLimpo}/${msgIdComentario}">(Ver Palpite)</a>`;
             let entradaGanhador = `🥇 ${perfilLink}${linkPalpite}`;
 
             // 1. Legenda Temporária
@@ -791,15 +802,25 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 ON CONFLICT(id) DO UPDATE SET pontos = pontos + 1, nome = ?
             `).bind(targetUserId, realNameVencedor, Date.now(), realNameVencedor).run();
 
-            if (postId) {
-                await env.DB.prepare(`
-                    INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
-                    VALUES (?, ?, ?, 'Acerto Confirmado', 1, ?)
-                    ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
-                `).bind(postId, targetUserId, confronto, Date.now()).run();
-            }
+            await env.DB.prepare(`
+                INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                VALUES (?, ?, ?, 'Acerto Confirmado', 1, ?)
+                ON CONFLICT(postagem_id, user_id) DO UPDATE SET resgatado = 1, resgatado_em = excluded.resgatado_em
+            `).bind(postId, targetUserId, confronto, Date.now()).run();
 
-            await editarMensagem(`🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado ao ranking e acertos registrados!`);
+            // 4. Edita a mensagem removendo os botões de confirmação
+            await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: mensagem.message_id,
+                    text: `🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado ao ranking e acertos registrados!`,
+                    parse_mode: "HTML",
+                    disable_web_page_preview: true
+                })
+            });
+
             return new Response("OK", { status: 200 });
         }
 
