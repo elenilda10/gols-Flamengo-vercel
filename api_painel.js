@@ -1,5 +1,21 @@
 // ==========================================================
-// 🌐 PROCESSADOR DE APIS, GERENCIADOR WEB E MOTOR DE BOLÃO (CLOUDFLARE)
+// ⚙️ HELPERS PARA A TABELA DE CONFIGURAÇÕES (D1)
+// ==========================================================
+async function getConfig(db, chave) {
+    const row = await db.prepare("SELECT valor FROM config WHERE chave = ?").bind(chave).first();
+    return row ? row.valor : null;
+}
+
+async function setConfig(db, chave, valor) {
+    await db.prepare("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)").bind(chave, String(valor)).run();
+}
+
+async function deleteConfig(db, chave) {
+    await db.prepare("DELETE FROM config WHERE chave = ?").bind(chave).run();
+}
+
+// ==========================================================
+// 🌐 PROCESSADOR DE APIS, GERENCIADOR WEB E MOTOR DE BOLÃO
 // ==========================================================
 export async function processarRotaApi(request, env) {
     const url = new URL(request.url);
@@ -21,33 +37,20 @@ export async function processarRotaApi(request, env) {
     // ==========================================================
     if (url.pathname === "/api/ranking_api") {
         try {
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            const { results: usuarios } = await env.DB.prepare(`
+                SELECT id, nome, pontos 
+                FROM usuarios 
+                WHERE pontos > 0 
+                ORDER BY pontos DESC
+            `).all();
 
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
-            const ids = Object.keys(ranking);
-
-            let rankingArray = await Promise.all(ids.map(async (id) => {
-                const [acertosRaw, cachedPhotoUrl] = await Promise.all([
-                    env.GOLS_FLAMENGO_KV.get("acertos_" + id),
-                    env.GOLS_FLAMENGO_KV.get("profile_photo_url_" + id)
-                ]);
-
-                let acertos = [];
-                if (acertosRaw) {
-                    try {
-                        acertos = JSON.parse(acertosRaw);
-                        if (typeof acertos === "string") acertos = [acertos];
-                        if (!Array.isArray(acertos)) acertos = [];
-                    } catch (e) { acertos = []; }
-                }
-
-                let finalPhotoUrl = cachedPhotoUrl || "";
+            const rankingArray = await Promise.all(usuarios.map(async (u) => {
+                const uid = String(u.id);
+                let finalPhotoUrl = (await getConfig(env.DB, "profile_photo_url_" + uid)) || "";
 
                 if (!finalPhotoUrl && botToken) {
                     try {
-                        const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+                        const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${uid}&limit=1`);
                         const photosData = await photosRes.json();
 
                         if (photosData.ok && photosData.result?.photos?.length > 0) {
@@ -57,7 +60,7 @@ export async function processarRotaApi(request, env) {
 
                             if (fileData.ok && fileData.result?.file_path) {
                                 finalPhotoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                                await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, finalPhotoUrl, { expirationTtl: 86400 });
+                                await setConfig(env.DB, "profile_photo_url_" + uid, finalPhotoUrl);
                             }
                         }
                     } catch (e) {}
@@ -68,29 +71,25 @@ export async function processarRotaApi(request, env) {
                     return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
                 };
 
-                let nomeLimpo = sanitizarNome(nomes[id]);
+                let nomeLimpo = sanitizarNome(u.nome);
 
                 if (!finalPhotoUrl) {
                     finalPhotoUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nomeLimpo)}&backgroundColor=dc2626&textColor=ffffff&bold=true`;
                 }
 
-                let pontosCalculados = Number(ranking[id]) || 0;
-                let totalAcertos = acertos.length > 0 ? acertos.length : pontosCalculados;
-
                 return {
-                    id: String(id),
-                    uid: String(id),
+                    id: uid,
+                    uid: uid,
                     nome: nomeLimpo,
                     name: nomeLimpo,
-                    pontos: pontosCalculados,
-                    total: totalAcertos,
-                    acertos: acertos,
+                    pontos: u.pontos,
+                    total: u.pontos,
+                    acertos: [],
                     photo_url: finalPhotoUrl,
                     photo_file_id: finalPhotoUrl
                 };
             }));
 
-            rankingArray.sort(function (a, b) { return b.pontos - a.pontos; });
             return new Response(JSON.stringify({ ok: true, ranking: rankingArray }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
@@ -104,25 +103,23 @@ export async function processarRotaApi(request, env) {
         try {
             let uid = url.searchParams.get("uid");
             if (!uid) return new Response(JSON.stringify({ ok: false, error: "uid_missing" }), { status: 400, headers: headersCORS });
-            uid = String(uid);
+            uid = Number(uid);
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            const user = await env.DB.prepare("SELECT id, nome, pontos FROM usuarios WHERE id = ?").bind(uid).first();
+            if (!user) {
+                return new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 404, headers: headersCORS });
+            }
 
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
+            const posicaoRow = await env.DB.prepare("SELECT COUNT(*) + 1 as pos FROM usuarios WHERE pontos > ?").bind(user.pontos).first();
+            const posicao = posicaoRow?.pos || 1;
 
-            let nome = nomes[uid] || "Usuário";
-            let pontos = Number(ranking[uid]) || 0;
-
-            let rankingArray = Object.keys(ranking).map(function(id) {
-                return { id: String(id), pontos: Number(ranking[id]) || 0 };
-            });
-            rankingArray.sort(function(a, b) { return b.pontos - a.pontos; });
-
-            let posicao = rankingArray.findIndex(x => String(x.id) === uid) + 1;
-
-            return new Response(JSON.stringify({ ok: true, uid: uid, nome: nome, pontos: pontos, posicao: posicao }), { status: 200, headers: headersCORS });
+            return new Response(JSON.stringify({ 
+                ok: true, 
+                uid: String(user.id), 
+                nome: user.nome || "Torcedor", 
+                pontos: user.pontos || 0, 
+                posicao: posicao 
+            }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
@@ -132,10 +129,10 @@ export async function processarRotaApi(request, env) {
     // 🏆 PAINEL WEBAPP COMPLETO DO BOLÃO: /api/painel-bolao
     // ==========================================================
     else if (url.pathname === "/api/painel-bolao" && request.method === "GET") {
-        let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto") || "false";
-        let confrontoAtual = await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Nenhum no momento";
-        let postAtivoId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || "Nenhum";
-        let vencedoresTemp = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+        let bolaoAberto = (await getConfig(env.DB, "bolao_aberto")) || "false";
+        let confrontoAtual = (await getConfig(env.DB, "confronto_atual")) || "Nenhum no momento";
+        let postAtivoId = (await getConfig(env.DB, "postagem_ativa_id")) || "Nenhum";
+        let vencedoresTemp = (await getConfig(env.DB, "vencedores_temporarios")) || "";
 
         const htmlBolao = `
         <!DOCTYPE html>
@@ -209,7 +206,7 @@ export async function processarRotaApi(request, env) {
                     padding: 13px 15px; 
                     color: #fff; 
                     font-size: 14px; 
-                    font-family: var(--font-main);
+                    font-family: var(--font-main); 
                     outline: none; 
                     width: 100%; 
                     box-sizing: border-box; 
@@ -236,7 +233,7 @@ export async function processarRotaApi(request, env) {
         <body>
             <div class="container">
                 <div class="header-flex">
-                    <h1>🏆 Gestor do Bolão</h1>
+                    <h1>🏆 Gestor do Bolão (D1 SQL)</h1>
                     <div class="nav-links">
                         <a href="/api/painel-addgoal" class="nav-link">⚽ Gols</a>
                         <a href="/api/lista-gols" class="nav-link" style="color:#cbd5e1; background:rgba(255,255,255,0.05); border-color:rgba(255,255,255,0.1);">📋 Acervo</a>
@@ -257,7 +254,7 @@ export async function processarRotaApi(request, env) {
                     <button class="btn btn-red" onclick="alterarStatus('false')">🔒 Bloquear Palpites</button>
                 </div>
 
-                <div class="section-title">👤 1. Editar Pontos e Acertos do Usuário</div>
+                <div class="section-title">👤 1. Editar Pontos do Usuário</div>
                 <div class="field">
                     <label>ID do Telegram do Usuário</label>
                     <div style="display:flex; gap:8px;">
@@ -275,11 +272,7 @@ export async function processarRotaApi(request, env) {
                         <label>Pontos Totais no Ranking</label>
                         <input type="number" id="user_pontos_edit">
                     </div>
-                    <div class="field">
-                        <label>Lista de Acertos (JSON Array)</label>
-                        <textarea id="user_acertos_edit" style="font-family:var(--font-code); font-size:12px;" placeholder='["GRÊMIO X FLAMENGO 19H30 -> Grêmio 0x1 Flamengo"]'></textarea>
-                    </div>
-                    <button class="btn btn-green" style="width:100%;" onclick="salvarUserRanking()">💾 Salvar Dados do Torcedor</button>
+                    <button class="btn btn-green" style="width:100%;" onclick="salvarUserRanking()">💾 Salvar Dados no D1</button>
                 </div>
 
                 <div class="section-title">🔗 2. Vincular / Reativar Post do Canal</div>
@@ -288,10 +281,10 @@ export async function processarRotaApi(request, env) {
                     <input type="text" id="vincular_post_id" placeholder="Ex: 1234">
                 </div>
                 <div class="field">
-                    <label>Confronto (Opcional se desejar atualizar)</label>
+                    <label>Confronto (Opcional)</label>
                     <input type="text" id="vincular_confronto" value="${confrontoAtual !== "Nenhum no momento" ? confrontoAtual : ""}" placeholder="Ex: Flamengo X Vitória 19h30">
                 </div>
-                <button class="btn btn-orange" onclick="vincularPostExistente()">🔗 Reativar e Vincular Post no KV</button>
+                <button class="btn btn-orange" onclick="vincularPostExistente()">🔗 Reativar e Vincular Post no D1</button>
 
                 <div class="section-title">🚀 3. Iniciar Novo Bolão (Postar Foto)</div>
                 <div class="field">
@@ -309,7 +302,7 @@ export async function processarRotaApi(request, env) {
                     <label>Legenda dos Vencedores (Editável)</label>
                     <textarea id="vencedores_texto" placeholder="Ex: 🥇 Torcedor 1 (Ver Palpite)...">${vencedoresTemp}</textarea>
                 </div>
-                <button class="btn btn-purple" onclick="salvarVencedoresManual()">💾 Gravar Vencedores no KV</button>
+                <button class="btn btn-purple" onclick="salvarVencedoresManual()">💾 Gravar Vencedores no D1</button>
 
                 <div class="section-title">🏁 5. Encerrar Bolão e Postar Resultado</div>
                 <div class="field">
@@ -349,11 +342,10 @@ export async function processarRotaApi(request, env) {
                     if(data.ok) {
                         document.getElementById('user_nome_edit').value = data.nome || '';
                         document.getElementById('user_pontos_edit').value = data.pontos || 0;
-                        document.getElementById('user_acertos_edit').value = JSON.stringify(data.acertos || [], null, 2);
                         document.getElementById('userEditCard').style.display = 'block';
                         mostrarAviso('Dados do usuário carregados!', true);
                     } else {
-                        mostrarAviso('Usuário não encontrado no ranking.', false);
+                        mostrarAviso('Usuário não encontrado no banco.', false);
                     }
                 }
 
@@ -361,23 +353,17 @@ export async function processarRotaApi(request, env) {
                     const uid = document.getElementById('user_id_search').value.trim();
                     const nome = document.getElementById('user_nome_edit').value.trim();
                     const pontos = document.getElementById('user_pontos_edit').value;
-                    const acertosRaw = document.getElementById('user_acertos_edit').value;
 
-                    try {
-                        const acertos = JSON.parse(acertosRaw);
-                        const res = await fetch('/api/save-user-details', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ uid, nome, pontos, acertos })
-                        });
-                        const data = await res.json();
-                        if(data.ok) {
-                            mostrarAviso('✅ Perfil e acertos do usuário atualizados no KV!', true);
-                        } else {
-                            mostrarAviso('❌ Erro ao salvar.', false);
-                        }
-                    } catch(e) {
-                        alert('Formato do JSON de acertos inválido! Verifique a sintaxe.');
+                    const res = await fetch('/api/save-user-details', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ uid, nome, pontos })
+                    });
+                    const data = await res.json();
+                    if(data.ok) {
+                        mostrarAviso('✅ Dados do usuário atualizados no D1!', true);
+                    } else {
+                        mostrarAviso('❌ Erro ao salvar.', false);
                     }
                 }
 
@@ -429,7 +415,7 @@ export async function processarRotaApi(request, env) {
                     });
                     const data = await res.json();
                     if(data.ok) {
-                        mostrarAviso('✅ Lista de vencedores gravada!', true);
+                        mostrarAviso('✅ Lista de vencedores gravada no D1!', true);
                     } else {
                         mostrarAviso('❌ Erro ao salvar.', false);
                     }
@@ -448,7 +434,7 @@ export async function processarRotaApi(request, env) {
                     });
                     const data = await res.json();
                     if(data.ok) {
-                        mostrarAviso('✅ Bolão encerrado, postado no canal e ranking sincronizado na Vercel!', true);
+                        mostrarAviso('✅ Bolão encerrado, postado no canal e ranking sincronizado no D1!', true);
                         setTimeout(() => location.reload(), 1500);
                     } else {
                         mostrarAviso('❌ Erro: ' + (data.error || 'Falha ao encerrar'), false);
@@ -462,28 +448,25 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 👤 APIS DE EDIÇÃO INDIVIDUAL DO RANKING E ACERTOS
+    // 👤 APIS DE EDIÇÃO INDIVIDUAL DO RANKING NO D1
     // ==========================================================
     else if (url.pathname === "/api/get-user-details" && request.method === "GET") {
         try {
             let uid = url.searchParams.get("uid");
-            if(!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
+            if (!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
+            uid = Number(uid);
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-            let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
-
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let names = namesRaw ? JSON.parse(namesRaw) : {};
-            let acertos = acertosRaw ? JSON.parse(acertosRaw) : [];
+            const user = await env.DB.prepare("SELECT id, nome, pontos FROM usuarios WHERE id = ?").bind(uid).first();
+            if (!user) {
+                return new Response(JSON.stringify({ ok: false, error: "not_found" }), { status: 404, headers: headersCORS });
+            }
 
             return new Response(JSON.stringify({
                 ok: true,
-                nome: names[uid] || "Torcedor",
-                pontos: Number(ranking[uid]) || 0,
-                acertos: acertos
+                nome: user.nome || "Torcedor",
+                pontos: user.pontos || 0
             }), { status: 200, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -491,25 +474,18 @@ export async function processarRotaApi(request, env) {
     else if (url.pathname === "/api/save-user-details" && request.method === "POST") {
         try {
             const body = await request.json();
-            const { uid, nome, pontos, acertos } = body;
+            const { uid, nome, pontos } = body;
 
-            if(!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
+            if (!uid) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: headersCORS });
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let names = namesRaw ? JSON.parse(namesRaw) : {};
-
-            ranking[uid] = Number(pontos) || 0;
-            names[uid] = nome || "Torcedor";
-
-            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
-            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(names));
-            await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertos || []));
+            await env.DB.prepare(`
+                INSERT INTO usuarios (id, nome, pontos, criado_em)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET nome = ?, pontos = ?
+            `).bind(Number(uid), nome || "Torcedor", Number(pontos) || 0, Date.now(), nome || "Torcedor", Number(pontos) || 0).run();
 
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -519,7 +495,7 @@ export async function processarRotaApi(request, env) {
     // ==========================================================
     else if (url.pathname === "/api/bolao-toggle" && request.method === "POST") {
         let st = url.searchParams.get("status") || "false";
-        await env.GOLS_FLAMENGO_KV.put("bolao_aberto", st);
+        await setConfig(env.DB, "bolao_aberto", st);
         return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
     }
 
@@ -531,16 +507,16 @@ export async function processarRotaApi(request, env) {
 
             if (!postId) return new Response(JSON.stringify({ ok: false, error: "post_id_missing" }), { status: 400, headers: headersCORS });
 
-            await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", postId);
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+            await setConfig(env.DB, "postagem_ativa_id", postId);
+            await setConfig(env.DB, "bolao_aberto", "true");
 
             if (confronto) {
-                await env.GOLS_FLAMENGO_KV.put("confronto_atual", confronto);
-                await env.GOLS_FLAMENGO_KV.put("confronto_" + postId, confronto);
+                await setConfig(env.DB, "confronto_atual", confronto);
+                await setConfig(env.DB, "confronto_" + postId, confronto);
             }
 
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -548,9 +524,9 @@ export async function processarRotaApi(request, env) {
     else if (url.pathname === "/api/bolao-vencedores-update" && request.method === "POST") {
         try {
             const body = await request.json();
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", body.texto || "");
+            await setConfig(env.DB, "vencedores_temporarios", body.texto || "");
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -562,8 +538,8 @@ export async function processarRotaApi(request, env) {
             let infoJogo = formatarTimes(body.confronto.trim());
             let fotoId = body.foto.trim();
 
-            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
+            await deleteConfig(env.DB, "postagem_ativa_id");
+            await setConfig(env.DB, "vencedores_temporarios", "");
 
             let confrontoLimpo = infoJogo.replace(/\d{1,2}H\d{0,2}/gi, "").replace(/\d{1,2}:\d{2}/g, "").trim();
             let partesTimes = confrontoLimpo.split(/\s+x\s+/i);
@@ -582,8 +558,8 @@ export async function processarRotaApi(request, env) {
                 "</blockquote>\n\n" +
                 "🏆 Vale <b>1 ponto</b> no ranking!";
 
-            await env.GOLS_FLAMENGO_KV.put("confronto_atual", infoJogo);
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+            await setConfig(env.DB, "confronto_atual", infoJogo);
+            await setConfig(env.DB, "bolao_aberto", "true");
 
             const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -593,12 +569,12 @@ export async function processarRotaApi(request, env) {
             const dadosPostagem = await respostaCanal.json();
             if (dadosPostagem.ok && dadosPostagem.result?.message_id) {
                 const canalMessageId = String(dadosPostagem.result.message_id);
-                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", canalMessageId);
-                await env.GOLS_FLAMENGO_KV.put("confronto_" + canalMessageId, infoJogo);
+                await setConfig(env.DB, "postagem_ativa_id", canalMessageId);
+                await setConfig(env.DB, "confronto_" + canalMessageId, infoJogo);
                 return new Response(JSON.stringify({ ok: true, id: canalMessageId }), { status: 200, headers: headersCORS });
             }
             return new Response(JSON.stringify({ ok: false, error: dadosPostagem.description || "Falha ao enviar para o canal" }), { status: 500, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -608,51 +584,33 @@ export async function processarRotaApi(request, env) {
             const body = await request.json();
             let placar = body.placar.trim();
             let fotoResultadoId = body.foto ? body.foto.trim() : "";
-            let msgIdOriginal = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+            let msgIdOriginal = await getConfig(env.DB, "postagem_ativa_id");
 
             if (!msgIdOriginal) {
-                return new Response(JSON.stringify({ ok: false, error: "Nenhum bolão ativo encontrado no KV." }), { status: 400, headers: headersCORS });
+                return new Response(JSON.stringify({ ok: false, error: "Nenhum bolão ativo encontrado no D1." }), { status: 400, headers: headersCORS });
             }
 
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + msgIdOriginal) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
-            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+            let confronto = (await getConfig(env.DB, "confronto_" + msgIdOriginal)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
 
-            // 1. APURA OS PALPITES NO KV
-            let chaveListaGlobal = "palpites_" + msgIdOriginal;
-            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
-            let listaPalpites = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
+            // 1. APURA DIRETO NO D1
+            const { results: vencedores } = await env.DB.prepare(`
+                SELECT user_id FROM palpites 
+                WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
+            `).bind(msgIdOriginal, placar).all();
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            const vencedoresIds = vencedores.map(v => String(v.user_id));
 
-            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
-
-            const sanitizarNome = (str) => {
-                if (!str) return "Torcedor";
-                return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
-            };
-
-            for (let uid in listaPalpites) {
-                let p = listaPalpites[uid];
-                if (String(p.palpite || "").toLowerCase().trim() === placar.toLowerCase().trim()) {
-                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
-                    rankingNames[uid] = sanitizarNome(p.nome);
-
-                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
-                    let acertosLista = acertosRaw ? JSON.parse(acertosRaw) : [];
-                    if (!Array.isArray(acertosLista)) acertosLista = [];
-                    
-                    let textoFormatado = `${confronto} -> ${placar}`;
-                    if (!acertosLista.includes(textoFormatado)) {
-                        acertosLista.push(textoFormatado);
-                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
-                    }
-                }
+            if (vencedoresIds.length > 0) {
+                const placeholders = vencedoresIds.map(() => "?").join(",");
+                await env.DB.prepare(`
+                    UPDATE usuarios 
+                    SET pontos = pontos + 1 
+                    WHERE id IN (${placeholders})
+                `).bind(...vencedoresIds).run();
             }
 
-            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
-            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
+            await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
+            let vencedoresFinal = (await getConfig(env.DB, "vencedores_temporarios")) || (vencedoresIds.length > 0 ? `🎉 ${vencedoresIds.length} torcedor(es) acertaram o placar!` : "Nenhum vencedor registrado.");
 
             // 2. MONTA E PUBLICA A LEGENDA / FOTO NO CANAL
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${confronto}</b>\n📊 Resultado: <b>${placar}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
@@ -671,14 +629,14 @@ export async function processarRotaApi(request, env) {
             }
 
             // 3. ENCERRA E LIMPA ESTADO
-            await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
-            await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
-            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+            await setConfig(env.DB, "resultado_oficial_" + msgIdOriginal, placar);
+            await setConfig(env.DB, "bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
+            await setConfig(env.DB, "bolao_aberto", "false");
+            await setConfig(env.DB, "vencedores_temporarios", "");
+            await deleteConfig(env.DB, "postagem_ativa_id");
 
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: headersCORS });
-        } catch(e) {
+        } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
     }
@@ -867,7 +825,7 @@ export async function processarRotaApi(request, env) {
         <body>
             <div class="card">
                 <h1 id="panelTitle">⚽ Adicionar Novo Gol</h1>
-                <p id="panelSubtitle">Preencha os campos abaixo para injetar no Banco KV.</p>
+                <p id="panelSubtitle">Preencha os campos abaixo para injetar no Banco D1 SQL.</p>
                 
                 <div class="nav-links">
                     <a href="/api/lista-gols" class="nav-link">📋 Lista Completa</a>
@@ -924,7 +882,7 @@ export async function processarRotaApi(request, env) {
             <div id="confirmModal" class="modal-overlay">
                 <div class="modal-content">
                     <h3 class="modal-title">⚠️ Confirmar Registro?</h3>
-                    <p style="font-size:13px; color:#a1a1aa; margin:0 0 12px 0;">Confira os dados antes de gravar de forma definitiva:</p>
+                    <p style="font-size:13px; color:#a1a1aa; margin:0 0 12px 0;">Confira os dados antes de gravar no D1 SQL:</p>
                     <div id="modalDataPreview" class="modal-body"></div>
                     <div class="modal-buttons">
                         <button class="btn-modal-cancel" onclick="fecharModal()">🔙 Voltar</button>
@@ -953,10 +911,10 @@ export async function processarRotaApi(request, env) {
                     if(goalIdInput.value.trim() !== "") {
                         panelTitle.innerText = "📝 Editar Gol Existente";
                         panelSubtitle.innerText = "Modificando dados do registro ID: " + goalIdInput.value.trim();
-                        btnSubmit.innerText = "💾 Salvar Alterações no Gol";
+                        btnSubmit.innerText = "💾 Salvar Alterações no D1";
                     } else {
                         panelTitle.innerText = "⚽ Adicionar Novo Gol";
-                        panelSubtitle.innerText = "Preencha os campos abaixo para injetar no Banco KV.";
+                        panelSubtitle.innerText = "Preencha os campos abaixo para injetar no Banco D1 SQL.";
                         btnSubmit.innerText = "🚀 Confirmar e Salvar Gol";
                     }
                 });
@@ -1052,7 +1010,7 @@ export async function processarRotaApi(request, env) {
 
                         if (data.ok) {
                             alertBox.style.backgroundColor = '#065f46';
-                            alertBox.innerText = '✅ Processado com sucesso! Registro salvo no KV com o ID: ' + data.id;
+                            alertBox.innerText = '✅ Processado com sucesso! Registro salvo no D1 com o ID: ' + data.id;
                             goalIdInput.value = '';
                             document.getElementById('goalForm').reset();
                             document.getElementById('admin_id').value = '7717528550';
@@ -1078,48 +1036,32 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 📋 LISTA DE GOLS COMPLETA (Tabela com Busca Global): /api/lista-gols
+    // 📋 LISTA DE GOLS COMPLETA (Tabela com Busca Global D1): /api/lista-gols
     // ==========================================================
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
             let queryText = url.searchParams.get("q") || "";
-            queryText = queryText.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\s]/g, "");
-
-            let index = [];
-            let cursor = "";
-            while (true) {
-                let listaBruta = await env.GOLS_FLAMENGO_KV.list({ prefix: "gol_", limit: 1000, cursor: cursor });
-                index.push(...listaBruta.keys.map(k => k.name.replace("gol_", "")));
-                if (listaBruta.list_complete || !listaBruta.cursor) break;
-                cursor = listaBruta.cursor;
-            }
-            index = [...new Set(index)];
-
-            let loteDadosRaw = await Promise.all(index.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`)));
             let gols = [];
 
-            for (let i = 0; i < loteDadosRaw.length; i++) {
-                if (loteDadosRaw[i]) {
-                    try {
-                        let golObj = JSON.parse(loteDadosRaw[i]);
-                        if (queryText) {
-                            const termos = queryText.split(" ").filter(Boolean);
-                            const targetText = (golObj.search || "").toLowerCase();
-                            const match = termos.every(term => targetText.includes(term));
-                            if (match) gols.push(golObj);
-                        } else {
-                            gols.push(golObj);
-                        }
-                    } catch(e) {}
-                }
+            if (queryText) {
+                const searchParam = `%${queryText.trim()}%`;
+                const { results } = await env.DB.prepare(`
+                    SELECT * FROM gols 
+                    WHERE jogo LIKE ? OR autor LIKE ? OR assistencia LIKE ? OR campeonato LIKE ? OR fase LIKE ?
+                    ORDER BY criado_em DESC
+                `).bind(searchParam, searchParam, searchParam, searchParam, searchParam).all();
+                gols = results;
+            } else {
+                const { results } = await env.DB.prepare(`
+                    SELECT * FROM gols 
+                    ORDER BY criado_em DESC 
+                    LIMIT 30
+                `).all();
+                gols = results;
             }
 
-            gols.sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
-
-            const totalEncontrados = gols.length;
-            if (!queryText) {
-                gols = gols.slice(0, 30);
-            }
+            const countRow = await env.DB.prepare("SELECT COUNT(*) as total FROM gols").first();
+            const totalEncontrados = queryText ? gols.length : (countRow?.total || 0);
 
             let linhasTabela = gols.map(gol => `
                 <tr id="row_${gol.id}">
@@ -1285,7 +1227,7 @@ export async function processarRotaApi(request, env) {
                         <strong>Nenhum gol encontrado com esses termos na busca global.</strong>
                     </div>
 
-                    <div class="info-txt">💡 Exibindo apenas os 30 gols mais recentes para economizar dados. Use a barra de busca acima para varrer o histórico completo.</div>
+                    <div class="info-txt">💡 Exibindo apenas os 30 gols mais recentes para economizar dados. Use a barra de busca acima para varrer o acervo completo.</div>
                 </div>
 
                 <div id="deleteModal" class="modal-overlay">
@@ -1295,7 +1237,7 @@ export async function processarRotaApi(request, env) {
                         <p style="font-size:12px; color:#f87171; font-weight:700; margin:10px 0 0 0;">🚨 Essa ação é irreversível e removerá o gol do robô!</p>
                         <div class="modal-buttons">
                             <button class="btn-modal-cancel" onclick="fecharModalDelecao()">Cancelar</button>
-                            <button class="btn-modal-delete" id="btnConfirmDelete" onclick="executarExclusaoDefinitiva()">🗑️ Apagar do KV</button>
+                            <button class="btn-modal-delete" id="btnConfirmDelete" onclick="executarExclusaoDefinitiva()">🗑️ Apagar do D1</button>
                         </div>
                     </div>
                 </div>
@@ -1342,7 +1284,7 @@ export async function processarRotaApi(request, env) {
                         } finally {
                             fecharModalDelecao();
                             btn.disabled = false;
-                            btn.innerText = '🗑️ Apagar do KV';
+                            btn.innerText = '🗑️ Apagar do D1';
                         }
                     }
                 </script>
@@ -1356,16 +1298,16 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // ⚙️ MOTOR DO BOLÃO (VALIDADOR DE PALPITES DO TELEGRAM)
+    // ⚙️ MOTOR DO BOLÃO (VALIDADOR DE PALPITES DO TELEGRAM NO D1)
     // ==========================================================
     else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
         try {
             const data = await request.json();
             const postId = String(data.post_id || "");
-            const userId = String(data.user_id || "");
+            const userId = Number(data.user_id || 0);
             const textoOriginal = String(data.texto_bruto || "").trim();
 
-            let bolaoStatus = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+            let bolaoStatus = await getConfig(env.DB, "bolao_aberto");
             if (bolaoStatus === "false" || bolaoStatus === null) {
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1379,16 +1321,15 @@ export async function processarRotaApi(request, env) {
                 return new Response(JSON.stringify({ ok: false, error: "fechado" }), { status: 200, headers: headersCORS });
             }
 
-            let palpiteExistente = await env.GOLS_FLAMENGO_KV.get(`palpite_user_${postId}_${userId}`);
+            const palpiteExistente = await env.DB.prepare("SELECT palpite FROM palpites WHERE postagem_id = ? AND user_id = ?").bind(postId, userId).first();
             if (palpiteExistente) {
-                let jsp = JSON.parse(palpiteExistente);
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         chat_id: data.chat_id, 
                         reply_to_message_id: Number(data.message_id), 
                         parse_mode: "Markdown", 
-                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *${jsp.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
+                        text: `⚠️ *Você já enviou um palpite!*\n\n📌 Seu palpite registrado: *${palpiteExistente.palpite}*\n\n• Não é permitido alterar ou enviar múltiplos palpites.` 
                     })
                 });
                 return new Response(JSON.stringify({ ok: false, error: "duplicado" }), { status: 200, headers: headersCORS });
@@ -1397,17 +1338,17 @@ export async function processarRotaApi(request, env) {
             let limpo = textoOriginal.replace(/×/g, "x").replace(/X/g, "x").replace(/–|—/g, "-").replace(/\s+/g, " ").trim();
             let direto = limpo.match(/(?:^|\D)(\d{1,2})\s*(?:x|-|a)\s*(\d{1,2})(?:\D|$)/i);
             
-            let casa = "", fora = "", valido = false, tipoPlacar = "";
+            let casa = "", fora = "", valido = false;
             if (direto) { 
-                casa = direto[1]; fora = direto[2]; valido = true; tipoPlacar = "direto"; 
+                casa = direto[1]; fora = direto[2]; valido = true; 
             } else {
                 let semHorario = limpo.replace(/\b\d{1,2}\s*h\s*\d{0,2}\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ").replace(/\s+/g, " ").trim();
                 let comTimes = semHorario.match(/(?:^|[\s.,;:!?])([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})\s+([A-Za-zÀ-ÿ.' -]{2,40})\s+(\d{1,2})(?:$|[\s.,;:!?])/i);
                 if (comTimes) { 
-                    casa = comTimes[2]; fora = comTimes[4]; valido = true; tipoPlacar = "times"; 
+                    casa = comTimes[2]; fora = comTimes[4]; valido = true; 
                 } else {
                     let numeros = semHorario.match(/\b\d{1,2}\b/g);
-                    if (numeros && numeros.length === 2) { casa = numeros[0]; fora = numeros[1]; valido = true; tipoPlacar = "dois_numeros"; }
+                    if (numeros && numeros.length === 2) { casa = numeros[0]; fora = numeros[1]; valido = true; }
                 }
             }
 
@@ -1426,25 +1367,17 @@ export async function processarRotaApi(request, env) {
 
             let palpiteFinal = casa + "x" + fora;
 
-            let palpiteObjeto = {
-                user_id: userId,
-                nome: data.first_name,
-                username: data.username,
-                palpite: palpiteFinal,
-                texto_original: textoOriginal,
-                message_id: Number(data.message_id),
-                chat_id: Number(data.chat_id),
-                tipo: tipoPlacar,
-                timestamp: Date.now()
-            };
+            // Insere usuário se não existir e grava o palpite
+            await env.DB.prepare(`
+                INSERT INTO usuarios (id, nome, criado_em)
+                VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET nome = ?
+            `).bind(userId, data.first_name || "Torcedor", Date.now(), data.first_name || "Torcedor").run();
 
-            let chaveListaGlobal = "palpites_" + postId;
-            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
-            let listaGlobal = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
-            listaGlobal[userId] = palpiteObjeto;
-            
-            await env.GOLS_FLAMENGO_KV.put(chaveListaGlobal, JSON.stringify(listaGlobal));
-            await env.GOLS_FLAMENGO_KV.put(`palpite_user_${postId}_${userId}`, JSON.stringify(palpiteObjeto));
+            await env.DB.prepare(`
+                INSERT INTO palpites (postagem_id, user_id, palpite, criado_em)
+                VALUES (?, ?, ?, ?)
+            `).bind(postId, userId, palpiteFinal, Date.now()).run();
 
             await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -1469,20 +1402,8 @@ export async function processarRotaApi(request, env) {
             const id = url.searchParams.get("id");
             if (!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
 
-            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
-            let index = indexRaw ? JSON.parse(indexRaw) : [];
-            index = index.map(x => String(x));
-            
-            if (!index.includes(String(id))) {
-                return new Response(JSON.stringify({ ok: false, error: "ID não encontrado no acervo." }), { status: 404, headers: headersCORS });
-            }
-
-            let novoIndex = index.filter(x => String(x) !== String(id));
-            novoIndex = novoIndex.map(x => Number(x) || x);
-            await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(novoIndex));
-
-            await env.GOLS_FLAMENGO_KV.delete(`gol_${id}`);
-            return new Response(JSON.stringify({ ok: true, mensagem: "Excluído com sucesso." }), { status: 200, headers: headersCORS });
+            await env.DB.prepare("DELETE FROM gols WHERE id = ?").bind(String(id)).run();
+            return new Response(JSON.stringify({ ok: true, mensagem: "Excluído com sucesso do D1." }), { status: 200, headers: headersCORS });
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
@@ -1494,10 +1415,12 @@ export async function processarRotaApi(request, env) {
     else if (url.pathname === "/api/getgoal" && request.method === "GET") {
         try {
             const id = url.searchParams.get("id");
-            if(!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
-            const golRaw = await env.GOLS_FLAMENGO_KV.get(`gol_${id}`);
-            if(!golRaw) return new Response(JSON.stringify({ ok: false, error: "not_found" }), { status: 404, headers: headersCORS });
-            return new Response(JSON.stringify({ ok: true, gol: JSON.parse(golRaw) }), { status: 200, headers: headersCORS });
+            if (!id) return new Response(JSON.stringify({ ok: false, error: "id_missing" }), { status: 400, headers: headersCORS });
+            
+            const gol = await env.DB.prepare("SELECT * FROM gols WHERE id = ?").bind(String(id)).first();
+            if (!gol) return new Response(JSON.stringify({ ok: false, error: "not_found" }), { status: 404, headers: headersCORS });
+            
+            return new Response(JSON.stringify({ ok: true, gol }), { status: 200, headers: headersCORS });
         } catch (e) {
             return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers: headersCORS });
         }
@@ -1513,47 +1436,16 @@ export async function processarRotaApi(request, env) {
 
             const isEditing = body.id && body.id.trim() !== "";
             const goalId = isEditing ? body.id.trim() : String(Date.now());
-            
-            let oldData = {};
-            if (isEditing) {
-                const oldRaw = await env.GOLS_FLAMENGO_KV.get(`gol_${goalId}`);
-                if (!oldRaw) return new Response(JSON.stringify({ ok: false, error: "ID não encontrado." }), { status: 404, headers: headersCORS });
-                oldData = JSON.parse(oldRaw);
-            }
 
-            const safeNormalize = (text) => {
-                if (!text) return "";
-                try { text = text.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
-                return text.replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
-            };
-
-            const search = safeNormalize(`${body.jogo || ""} ${body.autor || ""} ${body.assistencia || ""} ${body.campeonato || ""} ${body.fase || ""}`);
-
-            const goalData = {
-                id: Number(goalId) || goalId,
-                jogo: body.jogo.trim(),
-                autor: body.autor.trim(),
-                assistencia: body.assistencia.trim(),
-                campeonato: body.campeonato.trim(),
-                fase: body.fase.trim(),
-                file_id: body.file_id.trim(),
-                views: oldData.views || 0,
-                created_at: oldData.created_at || Date.now(),
-                updated_at: Date.now(),
-                search: search,
-                admin_id: Number(body.admin_id)
-            };
-
-            await env.GOLS_FLAMENGO_KV.put(`gol_${goalId}`, JSON.stringify(goalData));
-
-            if (!isEditing) {
-                let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
-                let index = indexRaw ? JSON.parse(indexRaw) : [];
-                if (!index.includes(Number(goalId)) && !index.includes(String(goalId))) {
-                    index.push(Number(goalId) || goalId);
-                }
-                await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(index));
-            }
+            await env.DB.prepare(`
+                INSERT INTO gols (id, file_id, jogo, autor, assistencia, campeonato, fase, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET 
+                    file_id = ?, jogo = ?, autor = ?, assistencia = ?, campeonato = ?, fase = ?
+            `).bind(
+                goalId, body.file_id.trim(), body.jogo.trim(), body.autor.trim(), body.assistencia.trim(), body.campeonato.trim(), body.fase.trim(), Date.now(),
+                body.file_id.trim(), body.jogo.trim(), body.autor.trim(), body.assistencia.trim(), body.campeonato.trim(), body.fase.trim()
+            ).run();
 
             try {
                 const CANAL_BACKUP = "-1003703318973";
@@ -1561,8 +1453,8 @@ export async function processarRotaApi(request, env) {
                 await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        chat_id: CANAL_BACKUP, video: goalData.file_id,
-                        caption: `📌 <b>${txtStatus} via Painel Web</b>\n\n🆔 <code>${goalData.id}</code>\n⚽ ${goalData.jogo}\n\n#⃣ Autor: ${goalData.autor}\n🅰 Assistência: ${goalData.assistencia}\n🏆 ${goalData.campeonato} - ${goalData.fase}`,
+                        chat_id: CANAL_BACKUP, video: body.file_id.trim(),
+                        caption: `📌 <b>${txtStatus} via Painel Web</b>\n\n🆔 <code>${goalId}</code>\n⚽ ${body.jogo.trim()}\n\n#⃣ Autor: ${body.autor.trim()}\n🅰 Assistência: ${body.assistencia.trim()}\n🏆 ${body.campeonato.trim()} - ${body.fase.trim()}`,
                         parse_mode: "HTML"
                     })
                 });
@@ -1575,19 +1467,28 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🔄 ROTA MIGRATÓRIA: /api/importar-tudo
+    // 🔄 ROTA MIGRATÓRIA: /api/importar-tudo (Injeta lote no D1)
     // ==========================================================
     else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
         try {
             const acervo = await request.json();
-            let novosIds = [];
             for (const gol of acervo) {
                 if (gol && gol.id) {
-                    await env.GOLS_FLAMENGO_KV.put(`gol_${gol.id}`, JSON.stringify(gol));
-                    novosIds.push(String(gol.id));
+                    await env.DB.prepare(`
+                        INSERT OR REPLACE INTO gols (id, file_id, jogo, autor, assistencia, campeonato, fase, criado_em)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    `).bind(
+                        String(gol.id),
+                        gol.file_id || "",
+                        gol.jogo || "",
+                        gol.autor || "",
+                        gol.assistencia || "",
+                        gol.campeonato || "",
+                        gol.fase || gol.rodada || "",
+                        gol.created_at || Date.now()
+                    ).run();
                 }
             } 
-            await env.GOLS_FLAMENGO_KV.put("gols_index", JSON.stringify(novosIds));
             return new Response(JSON.stringify({ status: "sucesso", gols_importados: acervo.length }), { status: 200, headers: headersCORS });
         } catch (erro) {
             return new Response(JSON.stringify({ status: "erro", detalhe: erro.message }), { status: 500, headers: headersCORS });
@@ -1595,7 +1496,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🏆 APURAÇÃO DO BOLÃO VIA POST
+    // 🏆 APURAÇÃO DO BOLÃO VIA POST (D1 SQL)
     // ==========================================================
     else if (url.pathname === "/api/apurar-bolao" && request.method === "POST") {
         try {
@@ -1608,67 +1509,25 @@ export async function processarRotaApi(request, env) {
                 return new Response(JSON.stringify({ ok: false, error: "Acesso negado" }), { status: 401, headers: headersCORS });
             }
 
-            let chaveListaGlobal = "palpites_" + postId;
-            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
-            if (!listaGlobalRaw) {
-                return new Response(JSON.stringify({ ok: false, error: "Nenhum palpite encontrado para esta postagem." }), { status: 404, headers: headersCORS });
+            const { results: vencedores } = await env.DB.prepare(`
+                SELECT user_id FROM palpites 
+                WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
+            `).bind(postId, placarReal).all();
+
+            const ganhadoresId = vencedores.map(v => String(v.user_id));
+
+            if (ganhadoresId.length > 0) {
+                const placeholders = ganhadoresId.map(() => "?").join(",");
+                await env.DB.prepare(`
+                    UPDATE usuarios 
+                    SET pontos = pontos + 1 
+                    WHERE id IN (${placeholders})
+                `).bind(...ganhadoresId).run();
             }
-            let listaPalpites = JSON.parse(listaGlobalRaw);
-
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
-
-            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
-
-            let ganhadoresId = [];
-            let contagemGanhadores = 0;
-
-            const sanitizarNome = (str) => {
-                if (!str) return "Torcedor";
-                return str.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "").trim() || "Torcedor";
-            };
-
-            for (let uid in listaPalpites) {
-                let dadosTorcedor = listaPalpites[uid];
-                let palpiteUser = String(dadosTorcedor.palpite || "").toLowerCase().trim();
-                
-                if (palpiteUser === placarReal) {
-                    ganhadoresId.push(uid);
-                    contagemGanhadores++;
-
-                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
-                    rankingNames[uid] = sanitizarNome(dadosTorcedor.nome);
-
-                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
-                    let acertosLista = [];
-                    if (acertosRaw) {
-                        try {
-                            acertosLista = JSON.parse(acertosRaw);
-                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
-                            if (!Array.isArray(acertosLista)) acertosLista = [];
-                        } catch (e) { acertosLista = []; }
-                    }
-
-                    let textoFormatado = `${confronto} -> ${placarReal}`;
-                    if (!acertosLista.includes(textoFormatado)) {
-                        acertosLista.push(textoFormatado);
-                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
-                    }
-                }
-            }
-
-            if (contagemGanhadores > 0) {
-                await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
-                await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
-            }
-
-            await env.GOLS_FLAMENGO_KV.delete(chaveListaGlobal);
 
             return new Response(JSON.stringify({ 
                 ok: true, 
-                ganhadores_contagem: contagemGanhadores,
+                ganhadores_contagem: ganhadoresId.length,
                 ganhadores_lista: ganhadoresId 
             }), { status: 200, headers: headersCORS });
 
