@@ -437,7 +437,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
                 });
             } catch (e) {
-                console.error("Erro ao aplicar reação:", e.message);
+                console.error("Erro ao aplicar reação manual:", e.message);
             }
 
             return new Response("OK", { status: 200 });
@@ -829,7 +829,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // ⚽ CAPTURA AUTOMÁTICA DE PALPITES NO CANAL/GRUPO (SALVA NO D1 E REAGE)
+        // ⚽ CAPTURA AUTOMÁTICA DE PALPITES VINCULADOS AO BOLÃO DO CANAL
         // ==========================================================
         else if (texto) {
             const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
@@ -844,15 +844,27 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                         const replyTo = mensagem.reply_to_message;
                         const threadId = mensagem.message_thread_id;
 
-                        // Valida se o comentário responde ao post ativo no canal/grupo de discussão
+                        // Se o post no canal gerou um post espelho no grupo, ele vincula automaticamente
+                        let postGrupoId = await getConfig(env.DB, "post_grupo_id_" + postId);
+
+                        // Se a mensagem que está sendo respondida é um encaminhamento automático do canal com o ID do bolão
+                        const eEncaminhamentoDoBolao = replyTo && (
+                            String(replyTo.forward_from_message_id) === String(postId) ||
+                            (replyTo.forward_origin && String(replyTo.forward_origin.message_id) === String(postId))
+                        );
+
+                        // Se a resposta está dentro do ID do post que chegou no grupo
+                        if (eEncaminhamentoDoBolao && replyTo.message_id && !postGrupoId) {
+                            postGrupoId = String(replyTo.message_id);
+                            await setConfig(env.DB, "post_grupo_id_" + postId, postGrupoId);
+                        }
+
+                        // Validação estrita: responde ao post do canal, ao post do grupo ou à thread correspondente
                         const eComentarioDoBolao = Boolean(
-                            (replyTo && (
-                                String(replyTo.message_id) === String(postId) ||
-                                String(replyTo.forward_from_message_id) === String(postId) ||
-                                String(replyTo.forward_origin?.message_id) === String(postId)
-                            )) ||
-                            (threadId && String(threadId) === String(postId)) ||
-                            (replyTo && replyTo.is_automatic_forward)
+                            eEncaminhamentoDoBolao ||
+                            (postGrupoId && replyTo && String(replyTo.message_id) === String(postGrupoId)) ||
+                            (postGrupoId && threadId && String(threadId) === String(postGrupoId)) ||
+                            (replyTo && String(replyTo.message_id) === String(postId))
                         );
 
                         if (eComentarioDoBolao) {
@@ -877,7 +889,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                                 console.error("Erro ao reagir:", e.message);
                             }
 
-                            // Grava palpite com rastreio de mensagem para /reagir_pendentes
+                            // Grava no D1 vinculado ao bolão
                             await env.DB.prepare(`
                                 INSERT INTO palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
