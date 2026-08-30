@@ -33,12 +33,149 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
+    // 🚀 ROTA AUTOMÁTICA DE MIGRAÇÃO: /api/migrar-tudo
+    // ==========================================================
+    if (url.pathname === "/api/migrar-tudo" && request.method === "GET") {
+        try {
+            let relatorio = {
+                gols: 0,
+                usuarios: 0,
+                acertos: 0,
+                configuracoes: 0,
+                erros: []
+            };
+
+            // 1. Migração de Gols
+            let golsChaves = [];
+            let cursorGols = "";
+            while (true) {
+                let lista = await env.GOLS_FLAMENGO_KV.list({ prefix: "gol_", limit: 1000, cursor: cursorGols });
+                golsChaves.push(...lista.keys.map(k => k.name));
+                if (lista.list_complete || !lista.cursor) break;
+                cursorGols = lista.cursor;
+            }
+
+            for (const chave of golsChaves) {
+                try {
+                    const raw = await env.GOLS_FLAMENGO_KV.get(chave);
+                    if (!raw) continue;
+                    const gol = JSON.parse(raw);
+                    const id = String(gol.id || chave.replace("gol_", ""));
+
+                    await env.DB.prepare(`
+                        INSERT INTO gols (id, file_id, jogo, autor, assistencia, campeonato, fase, criado_em)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            file_id = excluded.file_id,
+                            jogo = excluded.jogo,
+                            autor = excluded.autor,
+                            assistencia = excluded.assistencia,
+                            campeonato = excluded.campeonato,
+                            fase = excluded.fase
+                    `).bind(
+                        id,
+                        gol.file_id || "",
+                        gol.jogo || "",
+                        gol.autor || "",
+                        gol.assistencia || "",
+                        gol.campeonato || "",
+                        gol.fase || gol.rodada || "",
+                        Number(gol.created_at) || Date.now()
+                    ).run();
+                    relatorio.gols++;
+                } catch (e) {
+                    relatorio.erros.push(`Erro no gol ${chave}: ${e.message}`);
+                }
+            }
+
+            // 2. Migração de Ranking e Usuários
+            const rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
+            const namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            const ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
+            const names = namesRaw ? JSON.parse(namesRaw) : {};
+
+            const uids = Object.keys(ranking);
+
+            for (const uid of uids) {
+                try {
+                    const userIdNum = Number(uid);
+                    const nome = names[uid] || "Torcedor";
+                    const pontos = Number(ranking[uid]) || 0;
+                    const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uid}`)) || "pt";
+                    const fotoUrl = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_url_${uid}`)) || null;
+                    const fotoFileId = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_file_id_${uid}`)) || null;
+
+                    await env.DB.prepare(`
+                        INSERT INTO usuarios (id, nome, idioma, pontos, foto_url, foto_file_id, criado_em)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            nome = excluded.nome,
+                            pontos = excluded.pontos,
+                            idioma = excluded.idioma,
+                            foto_url = excluded.foto_url,
+                            foto_file_id = excluded.foto_file_id
+                    `).bind(
+                        userIdNum,
+                        nome,
+                        lang,
+                        pontos,
+                        fotoUrl,
+                        fotoFileId,
+                        Date.now()
+                    ).run();
+                    relatorio.usuarios++;
+
+                    // 3. Migração de Acertos
+                    const acertosRaw = await env.GOLS_FLAMENGO_KV.get(`acertos_${uid}`);
+                    if (acertosRaw) {
+                        try {
+                            let acertosLista = JSON.parse(acertosRaw);
+                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
+                            if (Array.isArray(acertosLista)) {
+                                for (const acertoTexto of acertosLista) {
+                                    await env.DB.prepare(`
+                                        INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                                        VALUES (?, ?, ?, ?, 1, ?)
+                                    `).bind(
+                                        "legado_" + Math.random().toString(36).substring(2, 8),
+                                        userIdNum,
+                                        String(acertoTexto),
+                                        "Acerto Registrado",
+                                        Date.now()
+                                    ).run();
+                                    relatorio.acertos++;
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                } catch (e) {
+                    relatorio.erros.push(`Erro no usuario ${uid}: ${e.message}`);
+                }
+            }
+
+            // 4. Migração de Configurações do Bolão
+            const chavesConfigs = ["bolao_aberto", "confronto_atual", "postagem_ativa_id", "vencedores_temporarios"];
+            for (const k of chavesConfigs) {
+                const v = await env.GOLS_FLAMENGO_KV.get(k);
+                if (v !== null && v !== undefined) {
+                    await setConfig(env.DB, k, String(v));
+                    relatorio.configuracoes++;
+                }
+            }
+
+            return new Response(JSON.stringify({ ok: true, relatorio }), { status: 200, headers: headersCORS });
+        } catch (err) {
+            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
+        }
+    }
+
+    // ==========================================================
     // 📊 API 1: /api/ranking_api (Tabela Completa com Fotos e Nomes)
     // ==========================================================
-    if (url.pathname === "/api/ranking_api") {
+    else if (url.pathname === "/api/ranking_api") {
         try {
             const { results: usuarios } = await env.DB.prepare(`
-                SELECT id, nome, pontos 
+                SELECT id, nome, pontos, foto_url 
                 FROM usuarios 
                 WHERE pontos > 0 
                 ORDER BY pontos DESC
@@ -46,7 +183,7 @@ export async function processarRotaApi(request, env) {
 
             const rankingArray = await Promise.all(usuarios.map(async (u) => {
                 const uid = String(u.id);
-                let finalPhotoUrl = (await getConfig(env.DB, "profile_photo_url_" + uid)) || "";
+                let finalPhotoUrl = u.foto_url || "";
 
                 if (!finalPhotoUrl && botToken) {
                     try {
@@ -60,7 +197,7 @@ export async function processarRotaApi(request, env) {
 
                             if (fileData.ok && fileData.result?.file_path) {
                                 finalPhotoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                                await setConfig(env.DB, "profile_photo_url_" + uid, finalPhotoUrl);
+                                await env.DB.prepare("UPDATE usuarios SET foto_url = ?, foto_file_id = ? WHERE id = ?").bind(finalPhotoUrl, fileId, u.id).run();
                             }
                         }
                     } catch (e) {}
@@ -592,7 +729,7 @@ export async function processarRotaApi(request, env) {
 
             let confronto = (await getConfig(env.DB, "confronto_" + msgIdOriginal)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
 
-            // 1. APURA DIRETO NO D1
+            // 1. Apuração direta via SQL no D1
             const { results: vencedores } = await env.DB.prepare(`
                 SELECT user_id FROM palpites 
                 WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
@@ -612,7 +749,7 @@ export async function processarRotaApi(request, env) {
             await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
             let vencedoresFinal = (await getConfig(env.DB, "vencedores_temporarios")) || (vencedoresIds.length > 0 ? `🎉 ${vencedoresIds.length} torcedor(es) acertaram o placar!` : "Nenhum vencedor registrado.");
 
-            // 2. MONTA E PUBLICA A LEGENDA / FOTO NO CANAL
+            // 2. Monta e publica a legenda / foto no canal
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${confronto}</b>\n📊 Resultado: <b>${placar}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
             let tecladoResgate = [[{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]];
 
@@ -628,7 +765,7 @@ export async function processarRotaApi(request, env) {
                 });
             }
 
-            // 3. ENCERRA E LIMPA ESTADO
+            // 3. Encerra e limpa o estado ativo
             await setConfig(env.DB, "resultado_oficial_" + msgIdOriginal, placar);
             await setConfig(env.DB, "bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
             await setConfig(env.DB, "bolao_aberto", "false");
@@ -1036,7 +1173,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 📋 LISTA DE GOLS COMPLETA (Tabela com Busca Global D1): /api/lista-gols
+    // 📋 LISTA DE GOLS COMPLETA: /api/lista-gols
     // ==========================================================
     else if (url.pathname === "/api/lista-gols" && request.method === "GET") {
         try {
@@ -1298,7 +1435,7 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // ⚙️ MOTOR DO BOLÃO (VALIDADOR DE PALPITES DO TELEGRAM NO D1)
+    // ⚙️ MOTOR DO BOLÃO: /api/processar-bolao
     // ==========================================================
     else if (url.pathname === "/api/processar-bolao" && request.method === "POST") {
         try {
@@ -1367,7 +1504,6 @@ export async function processarRotaApi(request, env) {
 
             let palpiteFinal = casa + "x" + fora;
 
-            // Insere usuário se não existir e grava o palpite
             await env.DB.prepare(`
                 INSERT INTO usuarios (id, nome, criado_em)
                 VALUES (?, ?, ?)
@@ -1461,76 +1597,6 @@ export async function processarRotaApi(request, env) {
             } catch (e) {}
 
             return new Response(JSON.stringify({ ok: true, id: goalId }), { status: 200, headers: headersCORS });
-        } catch (err) {
-            return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
-        }
-    }
-
-    // ==========================================================
-    // 🔄 ROTA MIGRATÓRIA: /api/importar-tudo (Injeta lote no D1)
-    // ==========================================================
-    else if (url.pathname === "/api/importar-tudo" && request.method === "POST") {
-        try {
-            const acervo = await request.json();
-            for (const gol of acervo) {
-                if (gol && gol.id) {
-                    await env.DB.prepare(`
-                        INSERT OR REPLACE INTO gols (id, file_id, jogo, autor, assistencia, campeonato, fase, criado_em)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    `).bind(
-                        String(gol.id),
-                        gol.file_id || "",
-                        gol.jogo || "",
-                        gol.autor || "",
-                        gol.assistencia || "",
-                        gol.campeonato || "",
-                        gol.fase || gol.rodada || "",
-                        gol.created_at || Date.now()
-                    ).run();
-                }
-            } 
-            return new Response(JSON.stringify({ status: "sucesso", gols_importados: acervo.length }), { status: 200, headers: headersCORS });
-        } catch (erro) {
-            return new Response(JSON.stringify({ status: "erro", detalhe: erro.message }), { status: 500, headers: headersCORS });
-        }
-    }
-
-    // ==========================================================
-    // 🏆 APURAÇÃO DO BOLÃO VIA POST (D1 SQL)
-    // ==========================================================
-    else if (url.pathname === "/api/apurar-bolao" && request.method === "POST") {
-        try {
-            const body = await request.json();
-            const adminId = String(body.admin_id || "");
-            const postId = String(body.post_id || "");
-            const placarReal = String(body.placar_real || "").toLowerCase().trim();
-
-            if (adminId !== "7717528550") {
-                return new Response(JSON.stringify({ ok: false, error: "Acesso negado" }), { status: 401, headers: headersCORS });
-            }
-
-            const { results: vencedores } = await env.DB.prepare(`
-                SELECT user_id FROM palpites 
-                WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
-            `).bind(postId, placarReal).all();
-
-            const ganhadoresId = vencedores.map(v => String(v.user_id));
-
-            if (ganhadoresId.length > 0) {
-                const placeholders = ganhadoresId.map(() => "?").join(",");
-                await env.DB.prepare(`
-                    UPDATE usuarios 
-                    SET pontos = pontos + 1 
-                    WHERE id IN (${placeholders})
-                `).bind(...ganhadoresId).run();
-            }
-
-            return new Response(JSON.stringify({ 
-                ok: true, 
-                ganhadores_contagem: ganhadoresId.length,
-                ganhadores_lista: ganhadoresId 
-            }), { status: 200, headers: headersCORS });
-
         } catch (err) {
             return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500, headers: headersCORS });
         }
