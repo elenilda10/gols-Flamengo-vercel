@@ -33,22 +33,21 @@ export async function processarRotaApi(request, env) {
     }
 
     // ==========================================================
-    // 🚀 ROTA DE MIGRAÇÃO EM LOTES (SEM ESTOURAR SUBREQUESTS)
+    // 🚀 ROTA DE MIGRAÇÃO EM LOTES (CORRIGIDA CONTRA FOREIGN KEY)
     // ==========================================================
     if (url.pathname === "/api/migrar-tudo" && request.method === "GET") {
         try {
             const cursor = url.searchParams.get("cursor") || "";
-            const tipo = url.searchParams.get("tipo") || "acertos"; // "acertos", "resgates" ou "usuarios"
+            const tipo = url.searchParams.get("tipo") || "acertos";
             
             let prefixo = "acertos_";
             if (tipo === "resgates") prefixo = "resgate_concluido_";
             if (tipo === "usuarios") prefixo = "user_";
 
-            const lista = await env.GOLS_FLAMENGO_KV.list({ prefix: prefixo, limit: 30, cursor: cursor || undefined });
+            const lista = await env.GOLS_FLAMENGO_KV.list({ prefix: prefixo, limit: 25, cursor: cursor || undefined });
             const chaves = lista.keys.map(k => k.name);
 
             let processados = 0;
-            let statements = [];
 
             for (const chave of chaves) {
                 try {
@@ -57,25 +56,23 @@ export async function processarRotaApi(request, env) {
                         const postId = partes[0];
                         const uid = Number(partes[1]);
                         if (postId && uid > 0) {
-                            statements.push(
-                                env.DB.prepare(`
-                                    INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
-                                    VALUES (?, ?, 'Bolão Oficial', 'Acerto Confirmado', 1, ?)
-                                `).bind(postId, uid, Date.now())
-                            );
+                            await env.DB.prepare(`INSERT OR IGNORE INTO usuarios (id, nome, criado_em) VALUES (?, 'Torcedor', ?)`).bind(uid, Date.now()).run();
+                            await env.DB.prepare(`INSERT OR IGNORE INTO boloes (postagem_id, confronto, criado_em) VALUES (?, 'Histórico', ?)`).bind(postId, Date.now()).run();
+                            await env.DB.prepare(`
+                                INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                                VALUES (?, ?, 'Bolão Oficial', 'Acerto Confirmado', 1, ?)
+                            `).bind(postId, uid, Date.now()).run();
                             processados++;
                         }
                     } else if (tipo === "usuarios") {
                         const uid = Number(chave.replace("user_", ""));
                         if (uid > 0) {
                             const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uid}`)) || "pt";
-                            statements.push(
-                                env.DB.prepare(`
-                                    INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
-                                    VALUES (?, 'Torcedor', ?, 0, ?)
-                                    ON CONFLICT(id) DO UPDATE SET idioma = excluded.idioma
-                                `).bind(uid, lang, Date.now())
-                            );
+                            await env.DB.prepare(`
+                                INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
+                                VALUES (?, 'Torcedor', ?, 0, ?)
+                                ON CONFLICT(id) DO UPDATE SET idioma = excluded.idioma
+                            `).bind(uid, lang, Date.now()).run();
                             processados++;
                         }
                     } else {
@@ -86,13 +83,11 @@ export async function processarRotaApi(request, env) {
                             const uid = Number(chave.replace("acertos_total_", ""));
                             const totalPontos = Number(raw) || 0;
                             if (uid > 0 && totalPontos > 0) {
-                                statements.push(
-                                    env.DB.prepare(`
-                                        INSERT INTO usuarios (id, nome, pontos, criado_em)
-                                        VALUES (?, 'Torcedor', ?, ?)
-                                        ON CONFLICT(id) DO UPDATE SET pontos = MAX(usuarios.pontos, excluded.pontos)
-                                    `).bind(uid, totalPontos, Date.now())
-                                );
+                                await env.DB.prepare(`
+                                    INSERT INTO usuarios (id, nome, pontos, criado_em)
+                                    VALUES (?, 'Torcedor', ?, ?)
+                                    ON CONFLICT(id) DO UPDATE SET pontos = MAX(usuarios.pontos, excluded.pontos)
+                                `).bind(uid, totalPontos, Date.now()).run();
                                 processados++;
                             }
                         } else {
@@ -107,27 +102,26 @@ export async function processarRotaApi(request, env) {
                                     itens = [raw];
                                 }
 
+                                await env.DB.prepare(`INSERT OR IGNORE INTO usuarios (id, nome, criado_em) VALUES (?, 'Torcedor', ?)`).bind(uid, Date.now()).run();
+
                                 for (const item of itens) {
                                     const partes = String(item).split("->");
                                     const confronto = partes[0]?.trim() || String(item);
                                     const placar = partes[1]?.trim() || "Placar Correto";
+                                    const dummyPostId = "migrado_" + Math.random().toString(36).substring(2, 9);
 
-                                    statements.push(
-                                        env.DB.prepare(`
-                                            INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
-                                            VALUES (?, ?, ?, ?, 1, ?)
-                                        `).bind("migrado_" + Math.random().toString(36).substring(2, 9), uid, confronto, placar, Date.now())
-                                    );
+                                    await env.DB.prepare(`INSERT OR IGNORE INTO boloes (postagem_id, confronto, criado_em) VALUES (?, ?, ?)`).bind(dummyPostId, confronto, Date.now()).run();
+
+                                    await env.DB.prepare(`
+                                        INSERT OR IGNORE INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
+                                        VALUES (?, ?, ?, ?, 1, ?)
+                                    `).bind(dummyPostId, uid, confronto, placar, Date.now()).run();
                                     processados++;
                                 }
                             }
                         }
                     }
                 } catch (e) {}
-            }
-
-            if (statements.length > 0) {
-                await env.DB.batch(statements);
             }
 
             return new Response(JSON.stringify({
@@ -703,7 +697,6 @@ export async function processarRotaApi(request, env) {
 
             let confronto = (await getConfig(env.DB, "confronto_" + msgIdOriginal)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
 
-            // 1. Apuração direta via SQL no D1
             const { results: vencedores } = await env.DB.prepare(`
                 SELECT user_id FROM palpites 
                 WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
@@ -723,7 +716,6 @@ export async function processarRotaApi(request, env) {
             await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
             let vencedoresFinal = (await getConfig(env.DB, "vencedores_temporarios")) || (vencedoresIds.length > 0 ? `🎉 ${vencedoresIds.length} torcedor(es) acertaram o placar!` : "Nenhum vencedor registrado.");
 
-            // 2. Monta e publica a legenda / foto no canal
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${confronto}</b>\n📊 Resultado: <b>${placar}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
             let tecladoResgate = [[{ text: "🥇 RESGATAR MEU PONTO", url: "https://t.me/FlamengoGolsBot?start=resgatar_" + msgIdOriginal }]];
 
@@ -739,7 +731,6 @@ export async function processarRotaApi(request, env) {
                 });
             }
 
-            // 3. Encerra e limpa o estado ativo
             await setConfig(env.DB, "resultado_oficial_" + msgIdOriginal, placar);
             await setConfig(env.DB, "bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
             await setConfig(env.DB, "bolao_aberto", "false");
