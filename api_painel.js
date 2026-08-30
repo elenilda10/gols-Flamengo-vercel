@@ -88,32 +88,43 @@ export async function processarRotaApi(request, env) {
                 }
             }
 
-            // 2. Migração de Ranking e Usuários
+            // 2. Migração de Todos os Usuários (Ativos e do Ranking)
             const rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
             const namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
             const ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
             const names = namesRaw ? JSON.parse(namesRaw) : {};
 
-            const uids = Object.keys(ranking);
+            let chavesUsers = [];
+            let cursorUsers = "";
+            while (true) {
+                let lista = await env.GOLS_FLAMENGO_KV.list({ prefix: "user_", limit: 1000, cursor: cursorUsers });
+                chavesUsers.push(...lista.keys.map(k => k.name.replace("user_", "")));
+                if (lista.list_complete || !lista.cursor) break;
+                cursorUsers = lista.cursor;
+            }
 
-            for (const uid of uids) {
+            const todosUids = [...new Set([...chavesUsers, ...Object.keys(ranking)])];
+
+            for (const uidStr of todosUids) {
                 try {
-                    const userIdNum = Number(uid);
-                    const nome = names[uid] || "Torcedor";
-                    const pontos = Number(ranking[uid]) || 0;
-                    const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uid}`)) || "pt";
-                    const fotoUrl = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_url_${uid}`)) || null;
-                    const fotoFileId = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_file_id_${uid}`)) || null;
+                    const userIdNum = Number(uidStr);
+                    if (isNaN(userIdNum) || userIdNum <= 0) continue;
+
+                    const nome = names[uidStr] || "Torcedor";
+                    const pontos = Number(ranking[uidStr]) || 0;
+                    const lang = (await env.GOLS_FLAMENGO_KV.get(`lang_${uidStr}`)) || "pt";
+                    const fotoUrl = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_url_${uidStr}`)) || null;
+                    const fotoFileId = (await env.GOLS_FLAMENGO_KV.get(`profile_photo_file_id_${uidStr}`)) || null;
 
                     await env.DB.prepare(`
                         INSERT INTO usuarios (id, nome, idioma, pontos, foto_url, foto_file_id, criado_em)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(id) DO UPDATE SET
-                            nome = excluded.nome,
-                            pontos = excluded.pontos,
+                            nome = CASE WHEN excluded.nome != 'Torcedor' THEN excluded.nome ELSE usuarios.nome END,
+                            pontos = CASE WHEN excluded.pontos > 0 THEN excluded.pontos ELSE usuarios.pontos END,
                             idioma = excluded.idioma,
-                            foto_url = excluded.foto_url,
-                            foto_file_id = excluded.foto_file_id
+                            foto_url = COALESCE(excluded.foto_url, usuarios.foto_url),
+                            foto_file_id = COALESCE(excluded.foto_file_id, usuarios.foto_file_id)
                     `).bind(
                         userIdNum,
                         nome,
@@ -126,7 +137,7 @@ export async function processarRotaApi(request, env) {
                     relatorio.usuarios++;
 
                     // 3. Migração de Acertos
-                    const acertosRaw = await env.GOLS_FLAMENGO_KV.get(`acertos_${uid}`);
+                    const acertosRaw = await env.GOLS_FLAMENGO_KV.get(`acertos_${uidStr}`);
                     if (acertosRaw) {
                         try {
                             let acertosLista = JSON.parse(acertosRaw);
@@ -149,7 +160,7 @@ export async function processarRotaApi(request, env) {
                         } catch (e) {}
                     }
                 } catch (e) {
-                    relatorio.erros.push(`Erro no usuario ${uid}: ${e.message}`);
+                    relatorio.erros.push(`Erro no usuario ${uidStr}: ${e.message}`);
                 }
             }
 
