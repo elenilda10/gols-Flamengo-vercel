@@ -138,7 +138,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const texts = {
                 pt: { search_title: "🔍 Buscar Gols", search_desc: "Digite jogador, time ou campeonato", search_msg: "🔍 <b>BUSCA DE GOLS ⚽</b>\n\nDigite palavras-chave como:\n• Pedro\n• Flamengo\n• Libertadores\n• Brasileirão\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Digite: <code>Flamengo</code>", list_title: "📋 Lista completa de gols", list_desc: "Clique para ver todos os gols do Flamengo", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os gols:\n👉 Digite: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os gols", btn_all_query: "Flamengo" },
                 en: { search_title: "🔍 Search Goals", search_desc: "Type player, team or competition", search_msg: "🔍 <b>GOALS SEARCH ⚽</b>\n\nType keywords like:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>To see all goals:</b>\n👉 Type: <code>Flamengo</code>", list_title: "📋 Full goals list", list_desc: "Click to see all Flamengo goals", list_msg: "📋 <b>FULL LIST ⚽</b>\n\nTo see all goals:\n👉 Type: <code>Flamengo</code>", btn_search: "🔎 Search", btn_all: "📋 View all goals", btn_all_query: "Flamengo" },
-                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos los goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
+                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos os goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
             };
             const t = (k) => texts[lang][k];
 
@@ -504,44 +504,69 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-                            // ==========================================================
+        // ==========================================================
         // 📌 COMANDO ADMIN: ATRELAR PALPITE MANUALMENTE (/salvar)
         // ==========================================================
         else if (texto.startsWith("/salvar") || texto.startsWith("/palpite")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
 
             if (!update.message?.reply_to_message) {
-                await enviarMensagem("❌ Responde à mensagem do torcedor com <code>/salvar</code> para registar o palpite.");
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "7717528550",
+                        text: "❌ <b>Erro /salvar:</b> Você precisa responder à mensagem do torcedor.",
+                        parse_mode: "HTML"
+                    })
+                });
                 return new Response("OK", { status: 200 });
             }
 
             let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
             if (!postId) {
-                await enviarMensagem("❌ Nenhum bolão ativo encontrado no momento.");
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "7717528550",
+                        text: "❌ <b>Erro /salvar:</b> Nenhum bolão ativo encontrado na tabela config.",
+                        parse_mode: "HTML"
+                    })
+                });
                 return new Response("OK", { status: 200 });
             }
 
             const targetMsg = update.message.reply_to_message;
             const targetUser = targetMsg.from;
-            const textoPalpite = targetMsg.text || targetMsg.caption || "";
+            const textoPalpite = String(targetMsg.text || targetMsg.caption || "");
 
-            const match = textoPalpite.match(/\d+\s*(?:x|X|×|-|a)\s*\d+/i);
+            // Regex flexível para capturar 3x1, 3 X 1, 3-1, 3 a 1, etc.
+            const match = textoPalpite.match(/(\d+)\s*(?:x|X|×|-|a)\s*(\d+)/i);
             if (!match) {
-                await enviarMensagem("❌ Não foi possível identificar um placar válido (ex: 2x1) no comentário respondido.");
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: "7717528550",
+                        text: `❌ <b>Erro /salvar:</b> Não foi possível achar um placar no texto:\n<code>${escHTML(textoPalpite)}</code>`,
+                        parse_mode: "HTML"
+                    })
+                });
                 return new Response("OK", { status: 200 });
             }
 
-            const placarLimpo = match[0].toLowerCase().replace(/\s+/g, "");
+            const placarLimpo = `${match[1]}x${match[2]}`.toLowerCase();
             const nomeTorcedor = sanitizarNome(`${targetUser.first_name || ""} ${targetUser.last_name || ""}`);
 
-            // 1. Garante o registo do utilizador na tabela
+            // 1. Grava Usuário
             await env.DB.prepare(`
                 INSERT INTO usuarios (id, nome, pontos, criado_em)
                 VALUES (?, ?, 0, ?)
                 ON CONFLICT(id) DO UPDATE SET nome = excluded.nome
             `).bind(targetUser.id, nomeTorcedor, Date.now()).run();
 
-            // 2. Grava/atualiza o palpite no D1 atrelado ao post ativo
+            // 2. Grava Palpite
             await env.DB.prepare(`
                 INSERT INTO palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
                 VALUES (?, ?, ?, ?, ?, 1, ?)
@@ -552,7 +577,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     reagido = 1
             `).bind(postId, targetUser.id, placarLimpo, targetMsg.message_id, chatId, Date.now()).run();
 
-            // 3. Tenta reagir com 👍 na mensagem do utilizador
+            // 3. Tenta Reagir
             let erroReacao = null;
             try {
                 const res = await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
@@ -567,34 +592,22 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 });
                 const resData = await res.json();
                 if (!resData.ok) {
-                    erroReacao = resData.description;
+                    erroReacao = resData.description || "Erro desconhecido";
                 }
             } catch (e) {
                 erroReacao = e.message;
             }
 
-            // 4. Apaga a mensagem do comando /salvar no grupo
+            // 4. Envia SEMPRE confirmação para o seu PV
             try {
-                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
-                });
-            } catch (e) {}
-
-            // 5. Envia mensagem de confirmação para o teu privado (PV)
-            try {
-                let msgPv = `✅ <b>Palpite Registado com Sucesso!</b>\n\n` +
-                            `👤 <b>Utilizador:</b> ${nomeTorcedor} (<code>${targetUser.id}</code>)\n` +
-                            `⚽ <b>Palpite:</b> <code>${placarLimpo}</code>\n` +
-                            `📌 <b>ID Postagem:</b> <code>${postId}</code>\n` +
-                            `💬 <b>ID Mensagem:</b> <code>${targetMsg.message_id}</code>`;
-
-                if (erroReacao) {
-                    msgPv += `\n\n⚠️ <i>Aviso: A reação 👍 falhou (${erroReacao}). Verifica se o bot é admin no grupo com permissão para reagir.</i>`;
-                } else {
-                    msgPv += `\n👍 <b>Reação aplicada:</b> Sim`;
-                }
+                let msgPv = `✅ <b>Palpite Salvo no D1 com Sucesso!</b>\n\n` +
+                            `👤 <b>Torcedor:</b> ${nomeTorcedor} (<code>${targetUser.id}</code>)\n` +
+                            `⚽ <b>Palpite Registrado:</b> <code>${placarLimpo}</code>\n` +
+                            `📌 <b>ID Post Canal:</b> <code>${postId}</code>\n` +
+                            `💬 <b>ID Mensagem Grupo:</b> <code>${targetMsg.message_id}</code>\n` +
+                            (erroReacao 
+                                ? `⚠️ <b>Falha na Reação Telegram:</b> <code>${erroReacao}</code>` 
+                                : `👍 <b>Reação Aplicada:</b> Sim`);
 
                 await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
                     method: "POST",
@@ -606,8 +619,17 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                     })
                 });
             } catch (e) {
-                console.error("Erro ao enviar confirmação para o PV:", e.message);
+                console.error("Erro PV:", e.message);
             }
+
+            // 5. Apaga mensagem do comando do grupo por último
+            try {
+                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
+                });
+            } catch (e) {}
 
             return new Response("OK", { status: 200 });
         }
@@ -976,8 +998,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                         );
 
                         if (eComentarioDoBolao) {
-                            const match = texto.match(/\d+\s*(?:x|X|×|-|a)\s*\d+/i);
-                            const placarLimpo = match ? match[0].toLowerCase().replace(/\s+/g, "") : texto.trim();
+                            const match = texto.match(/(\d+)\s*(?:x|X|×|-|a)\s*(\d+)/i);
+                            const placarLimpo = match ? `${match[1]}x${match[2]}`.toLowerCase() : texto.trim();
 
                             let reagiuOk = 0;
                             try {
