@@ -504,6 +504,82 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
+                    // ==========================================================
+        // 📌 COMANDO ADMIN: ATRELAR PALPITE MANUALMENTE (/salvar)
+        // ==========================================================
+        else if (texto.startsWith("/salvar") || texto.startsWith("/palpite")) {
+            if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
+
+            if (!update.message?.reply_to_message) {
+                await enviarMensagem("❌ Responda à mensagem do torcedor com <code>/salvar</code> para registrar o palpite.");
+                return new Response("OK", { status: 200 });
+            }
+
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
+            if (!postId) {
+                await enviarMensagem("❌ Nenhum bolão ativo encontrado no momento.");
+                return new Response("OK", { status: 200 });
+            }
+
+            const targetMsg = update.message.reply_to_message;
+            const targetUser = targetMsg.from;
+            const textoPalpite = targetMsg.text || targetMsg.caption || "";
+
+            const match = textoPalpite.match(/\d+\s*(?:x|X|×|-|a)\s*\d+/i);
+            if (!match) {
+                await enviarMensagem("❌ Não foi possível identificar um placar válido (ex: 2x1) no comentário respondido.");
+                return new Response("OK", { status: 200 });
+            }
+
+            const placarLimpo = match[0].toLowerCase().replace(/\s+/g, "");
+            const nomeTorcedor = sanitizarNome(`${targetUser.first_name || ""} ${targetUser.last_name || ""}`);
+
+            // Garante que o usuário existe na tabela de usuários
+            await env.DB.prepare(`
+                INSERT INTO usuarios (id, nome, pontos, criado_em)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(id) DO UPDATE SET nome = excluded.nome
+            `).bind(targetUser.id, nomeTorcedor, Date.now()).run();
+
+            // Grava o palpite atrelado ao ID da postagem ativa
+            await env.DB.prepare(`
+                INSERT INTO palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
+                VALUES (?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(postagem_id, user_id) DO UPDATE SET 
+                    palpite = excluded.palpite,
+                    mensagem_id = excluded.mensagem_id,
+                    chat_id = excluded.chat_id,
+                    reagido = 1
+            `).bind(postId, targetUser.id, placarLimpo, targetMsg.message_id, chatId, Date.now()).run();
+
+            // Reage ao comentário do torcedor com 👍
+            try {
+                await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        message_id: targetMsg.message_id,
+                        reaction: [{ type: "emoji", emoji: "👍" }],
+                        is_big: false
+                    })
+                });
+            } catch (e) {
+                console.error("Erro ao reagir no palpite:", e.message);
+            }
+
+            // Apaga a mensagem do comando /salvar
+            try {
+                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: chatId, message_id: mensagem.message_id })
+                });
+            } catch (e) {}
+
+            return new Response("OK", { status: 200 });
+        }
+            
         // ==========================================================
         // 🔐 DEMAIS COMANDOS DE ADMINISTRAÇÃO E BOLÃO
         // ==========================================================
