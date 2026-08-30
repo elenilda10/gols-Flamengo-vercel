@@ -1,21 +1,40 @@
 // ==========================================================
+// ⚙️ HELPERS PARA TABELA DE CONFIGURAÇÕES (D1)
+// ==========================================================
+async function getConfig(db, chave) {
+  const row = await db.prepare("SELECT valor FROM config WHERE chave = ?").bind(chave).first();
+  return row ? row.valor : null;
+}
+
+async function setConfig(db, chave, valor) {
+  await db.prepare("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)").bind(chave, String(valor)).run();
+}
+
+async function deleteConfig(db, chave) {
+  await db.prepare("DELETE FROM config WHERE chave = ?").bind(chave).run();
+}
+
+// ==========================================================
 // ⚙️ FUNÇÃO AUXILIAR: PROCESSA FOTOS EM LOTES DE 5 POR CLIQUE
 // ==========================================================
 async function processarLoteFotos(offset, chatId, env, botToken, eEdicao = false, messageId = null) {
-    let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-    let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-    let ids = Object.keys(ranking);
-    let total = ids.length;
+    const totalRow = await env.DB.prepare("SELECT COUNT(*) as total FROM usuarios WHERE pontos > 0").first();
+    const total = totalRow?.total || 0;
 
     const TAMANHO_LOTE = 5;
-    let lote = ids.slice(offset, offset + TAMANHO_LOTE);
+    const { results: lote } = await env.DB.prepare(`
+        SELECT id FROM usuarios 
+        WHERE pontos > 0 
+        ORDER BY pontos DESC 
+        LIMIT ? OFFSET ?
+    `).bind(TAMANHO_LOTE, offset).all();
 
     let atualizadosNoLote = 0;
     let semFotoNoLote = 0;
 
-    await Promise.all(lote.map(async (id) => {
+    await Promise.all(lote.map(async (u) => {
         try {
-            const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${id}&limit=1`);
+            const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${u.id}&limit=1`);
             const photosData = await photosRes.json();
 
             if (photosData.ok && photosData.result?.photos?.length > 0) {
@@ -25,8 +44,8 @@ async function processarLoteFotos(offset, chatId, env, botToken, eEdicao = false
 
                 if (fileData.ok && fileData.result?.file_path) {
                     const photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                    await env.GOLS_FLAMENGO_KV.put("profile_photo_url_" + id, photoUrl, { expirationTtl: 2592000 });
-                    await env.GOLS_FLAMENGO_KV.put("profile_photo_file_id_" + id, fileId);
+                    await setConfig(env.DB, `profile_photo_url_${u.id}`, photoUrl);
+                    await setConfig(env.DB, `profile_photo_file_id_${u.id}`, fileId);
                     atualizadosNoLote++;
                 } else {
                     semFotoNoLote++;
@@ -95,20 +114,20 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         const update = await request.json();
 
         // ==========================================================
-        // ⚡ MODO INLINE QUERY (Busca de Gols)
+        // ⚡ MODO INLINE QUERY (Busca de Gols via D1 SQL)
         // ==========================================================
         if (update.inline_query) {
             const inlineQuery = update.inline_query;
             const busca = inlineQuery.query || "";
             const queryId = inlineQuery.id;
             const offset = parseInt(inlineQuery.offset || "0") || 0;
-            const uidTelegram = String(inlineQuery.from.id);
+            const uidTelegram = Number(inlineQuery.from.id);
             
-            let idiomaSalvo = await env.GOLS_FLAMENGO_KV.get(`lang_${uidTelegram}`);
+            const userDb = await env.DB.prepare("SELECT idioma FROM usuarios WHERE id = ?").bind(uidTelegram).first();
             let lang = "pt";
 
-            if (idiomaSalvo && ["pt", "en", "es"].includes(idiomaSalvo.toLowerCase().trim())) {
-                lang = idiomaSalvo.toLowerCase().trim();
+            if (userDb?.idioma && ["pt", "en", "es"].includes(userDb.idioma.toLowerCase())) {
+                lang = userDb.idioma.toLowerCase();
             } else {
                 let userLangCode = String(inlineQuery.from.language_code || "pt").toLowerCase();
                 if (userLangCode.startsWith("en")) lang = "en";
@@ -118,7 +137,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const texts = {
                 pt: { search_title: "🔍 Buscar Gols", search_desc: "Digite jogador, time ou campeonato", search_msg: "🔍 <b>BUSCA DE GOLS ⚽</b>\n\nDigite palavras-chave como:\n• Pedro\n• Flamengo\n• Libertadores\n• Brasileirão\n\n⚠️ <b>Para ver todos os gols:</b>\n👉 Digite: <code>Flamengo</code>", list_title: "📋 Lista completa de gols", list_desc: "Clique para ver todos os gols do Flamengo", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os gols:\n👉 Digite: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os gols", btn_all_query: "Flamengo" },
                 en: { search_title: "🔍 Search Goals", search_desc: "Type player, team or competition", search_msg: "🔍 <b>GOALS SEARCH ⚽</b>\n\nType keywords like:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>To see all goals:</b>\n👉 Type: <code>Flamengo</code>", list_title: "📋 Full goals list", list_desc: "Click to see all Flamengo goals", list_msg: "📋 <b>FULL LIST ⚽</b>\n\nTo see all goals:\n👉 Type: <code>Flamengo</code>", btn_search: "🔎 Search", btn_all: "📋 View all goals", btn_all_query: "Flamengo" },
-                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos los goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos los goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
+                es: { search_title: "🔍 Buscar Goles", search_desc: "Escribe jugador, equipo o competición", search_msg: "🔍 <b>BÚSQUEDA DE GOLES ⚽</b>\n\nEscribe palabras clave como:\n• Pedro\n• Flamengo\n• Libertadores\n\n⚠️ <b>Para ver todos los goles:</b>\n👉 Escribe: <code>Flamengo</code>", list_title: "📋 Lista completa de goles", list_desc: "Haz clic para ver todos los goles", list_msg: "📋 <b>LISTA COMPLETA ⚽</b>\n\nPara ver todos os goles:\n👉 Escribe: <code>Flamengo</code>", btn_search: "🔎 Buscar", btn_all: "📋 Ver todos os goles", btn_all_query: "Flamengo" }
             };
             const t = (k) => texts[lang][k];
 
@@ -146,61 +165,29 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 return new Response("OK", { status: 200 });
             }
 
-            let indexRaw = await env.GOLS_FLAMENGO_KV.get("gols_index");
-            let index = indexRaw ? JSON.parse(indexRaw) : [];
-            let aliasesRaw = await env.GOLS_FLAMENGO_KV.get("SEARCH_ALIASES");
-            let searchAliases = aliasesRaw ? JSON.parse(aliasesRaw) : { competitions: {} };
-
-            let termosOriginais = buscaNorm.split(" ").filter(Boolean);
-            let resultados = [];
             const MAX_RESULTS = 50;
-            const BATCH_SIZE = 20;
+            const querySql = `%${buscaNorm}%`;
 
-            let totalNoIndex = index.length;
-            let i = (totalNoIndex - 1) - offset;
-            let itensPercorridos = 0;
+            const { results: golsDb } = await env.DB.prepare(`
+                SELECT * FROM gols 
+                WHERE jogo LIKE ? OR autor LIKE ? OR assistencia LIKE ? OR campeonato LIKE ? OR fase LIKE ?
+                ORDER BY criado_em DESC 
+                LIMIT ? OFFSET ?
+            `).bind(querySql, querySql, querySql, querySql, querySql, MAX_RESULTS, offset).all();
 
-            while (i >= 0 && resultados.length < MAX_RESULTS) {
-                let loteIds = [];
-                for (let j = 0; j < BATCH_SIZE && (i - j) >= 0; j++) loteIds.push(index[i - j]);
+            const resultados = golsDb.map((gol) => {
+                return {
+                    type: "video",
+                    id: `vid_${gol.id}_${offset}`,
+                    video_file_id: gol.file_id,
+                    title: gol.jogo || "Gol",
+                    description: `⚽️ ${gol.autor || "-"} | 🏆 ${gol.campeonato || "-"}`,
+                    caption: `<b>${gol.jogo || ""}</b>\n\n⚽️ ${gol.autor || "-"}\n🅰 ${gol.assistencia || "-"}\n\n🏆 ${gol.campeonato || "-"} - ${gol.fase || "-"}\n\n🤖 @FlamengoGolsBot`,
+                    parse_mode: "HTML"
+                };
+            });
 
-                const loteDadosRaw = await Promise.all(loteIds.map(id => env.GOLS_FLAMENGO_KV.get(`gol_${id}`)));
-
-                for (let j = 0; j < loteDadosRaw.length; j++) {
-                    if (resultados.length >= MAX_RESULTS) break;
-                    itensPercorridos++;
-                    const golRaw = loteDadosRaw[j];
-                    if (!golRaw) continue;
-                    const gol = JSON.parse(golRaw);
-                    if (!gol?.file_id) continue;
-
-                    let baseTarget = safeNormalize(`${gol.jogo || ""} ${gol.autor || ""} ${gol.assistencia || ""} ${gol.campeonato || ""} ${gol.fase || gol.rodada || ""}`);
-                    let campAlias = searchAliases.competitions[safeNormalize(gol.campeonato)] || {};
-                    let extras = [];
-
-                    if (campAlias.label) extras = [campAlias.label.pt, campAlias.label.en, campAlias.label.es].map(safeNormalize);
-                    if (campAlias.search) extras = extras.concat(campAlias.search.map(safeNormalize));
-
-                    let textoAlvo = baseTarget + " " + extras.join(" ");
-                    if (!termosOriginais.every(term => textoAlvo.includes(term))) continue;
-
-                    let campLabel = campAlias.label?.[lang] || gol.campeonato || "-";
-
-                    resultados.push({
-                        type: "video",
-                        id: `vid_${loteIds[j]}_${offset}`,
-                        video_file_id: gol.file_id,
-                        title: gol.jogo || "Gol",
-                        description: `⚽️ ${gol.autor || "-"} | 🏆 ${campLabel}`,
-                        caption: `<b>${gol.jogo || ""}</b>\n\n⚽️ ${gol.autor || "-"}\n🅰 ${gol.assistencia || "-"}\n\n🏆 ${campLabel} - ${gol.fase || gol.rodada || "-"}\n\n🤖 @FlamengoGolsBot`,
-                        parse_mode: "HTML"
-                    });
-                }
-                if (resultados.length >= MAX_RESULTS) break;
-                i -= BATCH_SIZE;
-            }
-
-            let proximoOffset = (resultados.length === MAX_RESULTS && (offset + itensPercorridos < totalNoIndex)) ? String(offset + itensPercorridos) : "";
+            const proximoOffset = resultados.length === MAX_RESULTS ? String(offset + MAX_RESULTS) : "";
             await responderInline(resultados, proximoOffset);
             return new Response("OK", { status: 200 });
         }
@@ -230,7 +217,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        // 🛡️ SANITIZAÇÃO DE NOMES COM SUPORTE A SIMBOLOS DE HTML (<, > e &)
         const sanitizarNome = (str) => {
             if (!str) return "Torcedor";
             return str
@@ -265,22 +251,24 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         };
 
-        let savedLang = await env.GOLS_FLAMENGO_KV.get(`lang_${userId}`);
-        let userLangCode = savedLang || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
-        userLangCode = userLangCode.substring(0, 2).toLowerCase();
-        let lang = ["pt", "en", "es"].includes(userLangCode) ? userLangCode : "pt";
+        let userRaw = await env.DB.prepare("SELECT * FROM usuarios WHERE id = ?").bind(userId).first();
+        let lang = userRaw?.idioma || (update.callback_query ? update.callback_query.from.language_code : update.message.from.language_code) || "pt";
+        lang = lang.substring(0, 2).toLowerCase();
+        if (!["pt", "en", "es"].includes(lang)) lang = "pt";
 
-        let userExiste = await env.GOLS_FLAMENGO_KV.get(`user_${userId}`);
-        if (!userExiste) {
-            await env.GOLS_FLAMENGO_KV.put(`user_${userId}`, "true");
-            let totalAtual = await env.GOLS_FLAMENGO_KV.get("TOTAL_USERS") || 0;
-            await env.GOLS_FLAMENGO_KV.put("TOTAL_USERS", String(Number(totalAtual) + 1));
+        if (!userRaw) {
+            await env.DB.prepare(`
+                INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
+                VALUES (?, ?, ?, 0, ?)
+            `).bind(userId, realName, lang, Date.now()).run();
         }
-        let totalUsers = await env.GOLS_FLAMENGO_KV.get("TOTAL_USERS") || 1;
+
+        const totalUsersRow = await env.DB.prepare("SELECT COUNT(*) as total FROM usuarios").first();
+        const totalUsers = totalUsersRow?.total || 1;
 
         if (texto.startsWith("set_lang_")) {
             lang = texto.replace("set_lang_", "");
-            await env.GOLS_FLAMENGO_KV.put(`lang_${userId}`, lang);
+            await env.DB.prepare("UPDATE usuarios SET idioma = ? WHERE id = ?").bind(lang, userId).run();
             const avisos = { pt: "Idioma alterado! 🇧🇷", en: "Language changed! 🇺🇸", es: "¡Idioma cambiado! 🇪🇸" };
             await responderCallback(avisos[lang]);
             texto = "menu_principal";
@@ -326,61 +314,58 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         if (texto.startsWith("/start") || texto === "menu_principal") {
             if (isCallback && texto !== "menu_principal") await responderCallback();
 
-            // 🎯 1. SE FOR O DEEP LINK DE RESGATE (/start resgatar_ID)
+            // 🎯 1. DEEP LINK DE RESGATE (/start resgatar_ID)
             if (texto.startsWith("/start resgatar_")) {
                 let params = texto.replace("/start", "").trim();
                 let postagemId = params.replace("resgatar_", "").trim();
                 
-                let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postagemId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "Partida não informada";
-                let resultadoOficial = await env.GOLS_FLAMENGO_KV.get("resultado_oficial_" + postagemId) || "Resultado ainda não informado";
-                let encerradoEm = await env.GOLS_FLAMENGO_KV.get("bolao_encerrado_em_" + postagemId) || 0;
+                let confronto = (await getConfig(env.DB, "confronto_" + postagemId)) || (await getConfig(env.DB, "confronto_atual")) || "Partida não informada";
+                let resultadoOficial = (await getConfig(env.DB, "resultado_oficial_" + postagemId)) || "Resultado ainda não informado";
+                let encerradoEm = Number(await getConfig(env.DB, "bolao_encerrado_em_" + postagemId)) || 0;
                 
                 let umaHora = 60 * 60 * 1000;
-                let aindaEmRevisao = Date.now() - Number(encerradoEm) < umaHora;
+                let aindaEmRevisao = Date.now() - encerradoEm < umaHora;
 
-                let meuPalpiteRaw = await env.GOLS_FLAMENGO_KV.get("palpite_user_" + postagemId + "_" + userId);
-                let textoPalpite = "";
-                if (meuPalpiteRaw) {
-                    let meuPalpite = JSON.parse(meuPalpiteRaw);
-                    if (meuPalpite.palpite) textoPalpite = "\n📌 Seu palpite: <b>" + escHTML(meuPalpite.palpite) + "</b>";
-                }
+                const meuPalpiteRow = await env.DB.prepare("SELECT palpite FROM palpites WHERE postagem_id = ? AND user_id = ?").bind(postagemId, userId).first();
+                let textoPalpite = meuPalpiteRow?.palpite ? `\n📌 Seu palpite: <b>${escHTML(meuPalpiteRow.palpite)}</b>` : "";
 
-                let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postagemId);
+                let winnersRaw = await getConfig(env.DB, "vencedores_ids_" + postagemId);
                 let vencedoresIds = winnersRaw ? JSON.parse(winnersRaw) : [];
                 let ganhou = vencedoresIds.includes(String(userId));
 
                 let chaveResgateConcluido = "resgate_concluido_" + postagemId + "_" + userId;
-                let jaResgatou = await env.GOLS_FLAMENGO_KV.get(chaveResgateConcluido);
+                let jaResgatou = await getConfig(env.DB, chaveResgateConcluido);
 
                 if (jaResgatou === "true") {
-                    await enviarMensagem("✅ " + mention + ", você já resgatou este ponto do Flamengo.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite);
+                    await enviarMensagem(`✅ ${mention}, você já resgatou este ponto do Flamengo.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}`);
                     return new Response("OK", { status: 200 });
                 }
 
                 if (ganhou) {
-                    await env.GOLS_FLAMENGO_KV.put(chaveResgateConcluido, "true");
-                    let chaveAcertosTotal = "acertos_total_" + userId;
-                    let acertos = Number(await env.GOLS_FLAMENGO_KV.get(chaveAcertosTotal) || 0) + 1;
-                    await env.GOLS_FLAMENGO_KV.put(chaveAcertosTotal, String(acertos));
+                    await setConfig(env.DB, chaveResgateConcluido, "true");
+                    await env.DB.prepare("UPDATE usuarios SET pontos = pontos + 1 WHERE id = ?").bind(userId).run();
                     
-                    let jaVerificou = await env.GOLS_FLAMENGO_KV.get("resgate_verificado_" + postagemId + "_" + userId);
+                    const userAtualizado = await env.DB.prepare("SELECT pontos FROM usuarios WHERE id = ?").bind(userId).first();
+                    const acertos = userAtualizado?.pontos || 1;
+                    
+                    let jaVerificou = await getConfig(env.DB, "resgate_verificado_" + postagemId + "_" + userId);
                     let textoExtra = jaVerificou === "true" ? "\n🛠 Seu acerto foi reconhecido após a conferência manual." : "";
                     
-                    await enviarMensagem("🎯 " + mention + ", seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n✅ Status: <b>Você ganhou!</b>" + textoExtra + "\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>" + acertos + "</b>");
+                    await enviarMensagem(`🎯 ${mention}, seu acerto foi reconhecido! ❤️🖤\n\n🏆 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n✅ Status: <b>Você ganhou!</b>${textoExtra}\n\n➕ Ponto adicionado!\n📊 Total de acertos: <b>${acertos}</b>`);
                     return new Response("OK", { status: 200 });
                 }
 
-                await env.GOLS_FLAMENGO_KV.put("resgate_verificado_" + postagemId + "_" + userId, "true");
+                await setConfig(env.DB, "resgate_verificado_" + postagemId + "_" + userId, "true");
                 let textoRevisao = aindaEmRevisao ? "\n\n🕒 O resultado ainda está no período de revisão de 1 hora." : "";
-                await enviarMensagem("😔 " + mention + ", você não faturou este bolão.\n\n🏟 <b>Bolão:</b> " + escHTML(confronto) + "\n⚽ <b>Resultado:</b> " + escHTML(resultadoOficial) + textoPalpite + "\n\n❌ Status: <b>Você perdeu.</b>" + textoRevisao);
+                await enviarMensagem(`😔 ${mention}, você não faturou este bolão.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n❌ Status: <b>Você perdeu.</b>${textoRevisao}`);
                 return new Response("OK", { status: 200 });
             }
 
-            // 🏠 2. SE FOR O /start PADRÃO OU RETORNO AO MENU PRINCIPAL
+            // 🏠 2. MENU PRINCIPAL
             const textosMenu = {
-                pt: "👋 Olá " + realName + ", seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: " + totalUsers,
-                en: "👋 Hello " + realName + ", welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: " + totalUsers,
-                es: "👋 ¡Hola " + realName + ", bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: " + totalUsers
+                pt: `👋 Olá ${realName}, seja muito bem-vindo(a) ao @FlamengoGolsBot! 🔴⚫\n\nAqui você encontra todos os gols dos campeonatos que o Mengão disputa.\n\n✍️ Como usar:\nDigite em qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Mais comandos: /ajuda\n\n▶️ Usuários ativos: ${totalUsers}`,
+                en: `👋 Hello ${realName}, welcome to @FlamengoGolsBot! 🔴⚫\n\nHere you will find goals from all the championships Flamengo plays in.\n\n✍️ How to use:\nType in any chat:\n@FlamengoGolsBot Flamengo\n\n☝️ More commands: /help\n\n▶️ Active users: ${totalUsers}`,
+                es: `👋 ¡Hola ${realName}, bienvenido al @FlamengoGolsBot! 🔴⚫\n\nAquí encontrarás todos los goles de los campeonatos que disputa el Flamengo.\n\n✍️ Cómo usar:\nEscribe en qualquer chat:\n@FlamengoGolsBot Flamengo\n\n☝️ Más comandos: /ayuda\n\n▶️ Usuarios activos: ${totalUsers}`
             };
 
             const botoesMenu = {
@@ -428,9 +413,9 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let infoJogo = formatarTimes(input[0].trim());
             let fotoId = input[1].trim();
 
-            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
-            await env.GOLS_FLAMENGO_KV.delete("BOLAO_RESGATE_ID");
+            await deleteConfig(env.DB, "postagem_ativa_id");
+            await setConfig(env.DB, "vencedores_temporarios", "");
+            await deleteConfig(env.DB, "BOLAO_RESGATE_ID");
 
             let confrontoLimpo = infoJogo.replace(/\d{1,2}H\d{0,2}/gi, "").replace(/\d{1,2}:\d{2}/g, "").trim();
             let partesTimes = confrontoLimpo.split(/\s+x\s+/i);
@@ -449,8 +434,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 "</blockquote>\n\n" +
                 "🏆 Vale <b>1 ponto</b> no ranking!";
 
-            await env.GOLS_FLAMENGO_KV.put("confronto_atual", infoJogo);
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "true");
+            await setConfig(env.DB, "confronto_atual", infoJogo);
+            await setConfig(env.DB, "bolao_aberto", "true");
 
             const respostaCanal = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -460,8 +445,8 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const dadosPostagem = await respostaCanal.json();
             if (dadosPostagem.ok && dadosPostagem.result?.message_id) {
                 const canalMessageId = String(dadosPostagem.result.message_id);
-                await env.GOLS_FLAMENGO_KV.put("postagem_ativa_id", canalMessageId);
-                await env.GOLS_FLAMENGO_KV.put("confronto_" + canalMessageId, infoJogo);
+                await setConfig(env.DB, "postagem_ativa_id", canalMessageId);
+                await setConfig(env.DB, "confronto_" + canalMessageId, infoJogo);
                 await enviarMensagem(`✅ <b>Bolão iniciado com sucesso!</b>\n\n📌 <b>ID do Post no Canal:</b> <code>${canalMessageId}</code>`);
             } else {
                 let erroMsg = dadosPostagem.description || "Erro desconhecido ao enviar foto no canal.";
@@ -473,7 +458,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
         else if (texto.startsWith("/fechar_bolao")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+            await setConfig(env.DB, "bolao_aberto", "false");
             await enviarMensagem("⛔ <b>Bolão fechado para novos palpites!</b>\n\n*(Aguardando encerramento da partida)*");
             return new Response("OK", { status: 200 });
         }
@@ -493,7 +478,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             const msgIdComentario = replyTo.message_id;
             const chatIdComentario = update.message.chat.id;
 
-            let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || await env.GOLS_FLAMENGO_KV.get("BOLAO_RESGATE_ID");
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
             if (!postId) {
                 await enviarMensagem("❌ Nenhum bolão ativo encontrado.");
                 return new Response("OK", { status: 200 });
@@ -501,7 +486,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
 
             let realNameVencedor = sanitizarNome(`${vencedor.first_name || ""} ${vencedor.last_name || ""}`);
             let palpiteExibido = escHTML(replyTo.text || replyTo.caption || "Palpite do Jogo");
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
+            let confronto = (await getConfig(env.DB, "confronto_" + postId)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
 
             let textoPrevia = 
                 `🎯 <b>CONFIRMAR VENCEDOR DO BOLÃO?</b>\n\n` +
@@ -525,16 +510,16 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        // 🔘 PROCESSAMENTO DA RESPOSTA DOS BOTÕES DE CONFIRMAÇÃO DO /ganhou
+        // 🔘 PROCESSAMENTO DO BOTÃO DE CONFIRMAÇÃO DO /ganhou
         else if (texto.startsWith("confirm_ganhou_")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
             await responderCallback("Gravando acerto no banco...");
 
             let partes = texto.replace("confirm_ganhou_", "").split("_");
-            let targetUserId = partes[0];
+            let targetUserId = Number(partes[0]);
             let msgIdComentario = partes[1];
 
-            let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id") || await env.GOLS_FLAMENGO_KV.get("BOLAO_RESGATE_ID");
+            let postId = (await getConfig(env.DB, "postagem_ativa_id")) || (await getConfig(env.DB, "BOLAO_RESGATE_ID"));
             
             let userTargetInfo = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${targetUserId}`);
             let userData = await userTargetInfo.json();
@@ -545,43 +530,22 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let entradaGanhador = `🥇 ${perfilLink}${linkPalpite}`;
 
             // 1. Legenda Temporária
-            let listaAtual = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "";
+            let listaAtual = (await getConfig(env.DB, "vencedores_temporarios")) || "";
             let listaNova = listaAtual === "" ? entradaGanhador : listaAtual + "\n" + entradaGanhador;
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", listaNova);
+            await setConfig(env.DB, "vencedores_temporarios", listaNova);
 
             // 2. IDs de Resgate
-            let winnersRaw = await env.GOLS_FLAMENGO_KV.get("vencedores_ids_" + postId);
+            let winnersRaw = await getConfig(env.DB, "vencedores_ids_" + postId);
             let listaIds = winnersRaw ? JSON.parse(winnersRaw) : [];
             if (!listaIds.includes(String(targetUserId))) listaIds.push(String(targetUserId));
-            await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + postId, JSON.stringify(listaIds));
+            await setConfig(env.DB, "vencedores_ids_" + postId, JSON.stringify(listaIds));
 
-            // 3. Ranking e Nomes
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            ranking[targetUserId] = (Number(ranking[targetUserId]) || 0) + 1;
-            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(ranking));
-
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-            let names = namesRaw ? JSON.parse(namesRaw) : {};
-            names[targetUserId] = realNameVencedor;
-            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(names));
-
-            // 4. Acertos do Usuário
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + postId) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
-            let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + targetUserId);
-            let acertosLista = [];
-            if (acertosRaw) {
-                try {
-                    acertosLista = JSON.parse(acertosRaw);
-                    if (typeof acertosLista === "string") acertosLista = [acertosLista];
-                    if (!Array.isArray(acertosLista)) acertosLista = [];
-                } catch (e) { acertosLista = []; }
-            }
-
-            if (!acertosLista.includes(confronto)) {
-                acertosLista.push(confronto);
-                await env.GOLS_FLAMENGO_KV.put("acertos_" + targetUserId, JSON.stringify(acertosLista));
-            }
+            // 3. Atualiza Pontos no D1
+            await env.DB.prepare(`
+                INSERT INTO usuarios (id, nome, pontos, criado_em) 
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(id) DO UPDATE SET pontos = pontos + 1, nome = ?
+            `).bind(targetUserId, realNameVencedor, Date.now(), realNameVencedor).run();
 
             await editarMensagem(`🎯 <b>ACERTO CONFIRMADO!</b>\n\nParabéns ${perfilLink} 🏆\n➕ 1 ponto adicionado ao ranking e acertos registrados!`);
             return new Response("OK", { status: 200 });
@@ -595,7 +559,7 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // 🏁 COMANDO /encerrar_bolao (APURAÇÃO DIRETA NO CLOUDFLARE WORKER)
+        // 🏁 COMANDO /encerrar_bolao (APURAÇÃO INSTANTÂNEA NO D1)
         // ==========================================================
         else if (texto.startsWith("/encerrar_bolao")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
@@ -604,65 +568,38 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             let placar = input[0]?.trim();
             let fotoResultadoId = input[1]?.trim();
 
-            let msgIdOriginal = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+            let msgIdOriginal = await getConfig(env.DB, "postagem_ativa_id");
             if (!msgIdOriginal) {
                 await enviarMensagem("❌ Nenhum bolão ativo encontrado para encerrar.");
                 return new Response("OK", { status: 200 });
             }
 
-            let confronto = await env.GOLS_FLAMENGO_KV.get("confronto_" + msgIdOriginal) || await env.GOLS_FLAMENGO_KV.get("confronto_atual") || "FLAMENGO";
+            let confronto = (await getConfig(env.DB, "confronto_" + msgIdOriginal)) || (await getConfig(env.DB, "confronto_atual")) || "FLAMENGO";
 
-            // 1. APURAÇÃO INTERNA DIRETA DOS PALPITES NO KV
-            let chaveListaGlobal = "palpites_" + msgIdOriginal;
-            let listaGlobalRaw = await env.GOLS_FLAMENGO_KV.get(chaveListaGlobal);
-            let listaPalpites = listaGlobalRaw ? JSON.parse(listaGlobalRaw) : {};
+            // 1. APURAÇÃO DIRETA VIA QUERY SQL NO D1
+            const { results: vencedores } = await env.DB.prepare(`
+                SELECT user_id FROM palpites 
+                WHERE postagem_id = ? AND LOWER(TRIM(palpite)) = LOWER(TRIM(?))
+            `).bind(msgIdOriginal, placar).all();
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
+            const vencedoresIds = vencedores.map(v => String(v.user_id));
 
-            let rankingGlobal = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let rankingNames = namesRaw ? JSON.parse(namesRaw) : {};
-
-            let vencedoresIds = [];
-
-            for (let uid in listaPalpites) {
-                let p = listaPalpites[uid];
-                let palpiteUser = String(p.palpite || "").toLowerCase().trim();
-
-                if (palpiteUser === placar.toLowerCase().trim()) {
-                    vencedoresIds.push(uid);
-
-                    rankingGlobal[uid] = (Number(rankingGlobal[uid]) || 0) + 1;
-                    rankingNames[uid] = sanitizarNome(p.nome);
-
-                    let acertosRaw = await env.GOLS_FLAMENGO_KV.get("acertos_" + uid);
-                    let acertosLista = [];
-                    if (acertosRaw) {
-                        try {
-                            acertosLista = JSON.parse(acertosRaw);
-                            if (typeof acertosLista === "string") acertosLista = [acertosLista];
-                            if (!Array.isArray(acertosLista)) acertosLista = [];
-                        } catch (e) { acertosLista = []; }
-                    }
-
-                    let textoFormatado = `${confronto} -> ${placar}`;
-                    if (!acertosLista.includes(textoFormatado)) {
-                        acertosLista.push(textoFormatado);
-                        await env.GOLS_FLAMENGO_KV.put("acertos_" + uid, JSON.stringify(acertosLista));
-                    }
-                }
+            if (vencedoresIds.length > 0) {
+                const placeholders = vencedoresIds.map(() => "?").join(",");
+                await env.DB.prepare(`
+                    UPDATE usuarios 
+                    SET pontos = pontos + 1 
+                    WHERE id IN (${placeholders})
+                `).bind(...vencedoresIds).run();
             }
 
-            await env.GOLS_FLAMENGO_KV.put("ranking_global", JSON.stringify(rankingGlobal));
-            await env.GOLS_FLAMENGO_KV.put("ranking_names", JSON.stringify(rankingNames));
-            await env.GOLS_FLAMENGO_KV.put("vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
-
-            let vencedoresFinal = await env.GOLS_FLAMENGO_KV.get("vencedores_temporarios") || "Nenhum vencedor registrado.";
+            await setConfig(env.DB, "vencedores_ids_" + msgIdOriginal, JSON.stringify(vencedoresIds));
+            let vencedoresFinal = (await getConfig(env.DB, "vencedores_temporarios")) || (vencedoresIds.length > 0 ? `🎉 ${vencedoresIds.length} torcedor(es) acertaram o placar!` : "Nenhum vencedor registrado.");
 
             // 2. GRAVA RESULTADOS E FECHA PALPITES
-            await env.GOLS_FLAMENGO_KV.put("resultado_oficial_" + msgIdOriginal, placar);
-            await env.GOLS_FLAMENGO_KV.put("bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
-            await env.GOLS_FLAMENGO_KV.put("bolao_aberto", "false");
+            await setConfig(env.DB, "resultado_oficial_" + msgIdOriginal, placar);
+            await setConfig(env.DB, "bolao_encerrado_em_" + msgIdOriginal, String(Date.now()));
+            await setConfig(env.DB, "bolao_aberto", "false");
 
             // 3. PUBLICA NO CANAL
             let legendaResultado = `🏆 <b>RESULTADO DO BOLÃO</b> 🏆\n\n⚽ Jogo: <b>${escHTML(confronto)}</b>\n📊 Resultado: <b>${escHTML(placar)}</b>\n\n🥇 Ganhador(es):\n${vencedoresFinal}\n\n🎁 Resgate seu ponto no botão abaixo!`;
@@ -680,29 +617,31 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                 });
             }
 
-            await env.GOLS_FLAMENGO_KV.put("vencedores_temporarios", "");
-            await env.GOLS_FLAMENGO_KV.delete("postagem_ativa_id");
+            await setConfig(env.DB, "vencedores_temporarios", "");
+            await deleteConfig(env.DB, "postagem_ativa_id");
 
-            await enviarMensagem("✅ <b>Bolão encerrado, apuração executada e ranking atualizado no banco!</b>");
+            await enviarMensagem("✅ <b>Bolão encerrado, apuração executada e ranking atualizado no D1!</b>");
             return new Response("OK", { status: 200 });
         }
 
         else if (texto === "/ranking") {
             if (isCallback) await responderCallback();
 
-            let rankingRaw = await env.GOLS_FLAMENGO_KV.get("ranking_global");
-            let namesRaw = await env.GOLS_FLAMENGO_KV.get("ranking_names");
-
-            let ranking = rankingRaw ? JSON.parse(rankingRaw) : {};
-            let nomes = namesRaw ? JSON.parse(namesRaw) : {};
-
-            let rankingArray = Object.keys(ranking).map(id => ({ id: id, nome: nomes[id] || "Torcedor", pontos: Number(ranking[id]) || 0 }));
-            rankingArray.sort((a, b) => b.pontos - a.pontos);
+            const { results: rankingArray } = await env.DB.prepare(`
+                SELECT nome, pontos FROM usuarios 
+                WHERE pontos > 0 
+                ORDER BY pontos DESC 
+                LIMIT 15
+            `).all();
 
             let mensagemRanking = "🏆 <b>RANKING DO BOLÃO</b> 🏆\n\n";
-            for (let i = 0; i < rankingArray.length; i++) {
-                let pos = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "👤";
-                mensagemRanking += `${pos} ${rankingArray[i].nome} — <b>${rankingArray[i].pontos} pts</b>\n`;
+            if (rankingArray.length === 0) {
+                mensagemRanking += "<i>Nenhum torcedor pontuou ainda. Participe dos bolões no @Flamengo77!</i>\n";
+            } else {
+                for (let i = 0; i < rankingArray.length; i++) {
+                    let pos = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "👤";
+                    mensagemRanking += `${pos} ${rankingArray[i].nome} — <b>${rankingArray[i].pontos} pts</b>\n`;
+                }
             }
 
             const tecladoRanking = [[{ text: "🔄 Atualizar", callback_data: "/ranking" }]];
@@ -744,7 +683,6 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
             return new Response("OK", { status: 200 });
         }
 
-        // 🔘 MANIPULADOR DO BOTÃO "CONTINUAR"
         else if (texto.startsWith("fotos_page_")) {
             if (String(userId) !== "7717528550") return new Response("OK", { status: 200 });
             await responderCallback("Processando lote...");
@@ -755,16 +693,16 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
         }
 
         // ==========================================================
-        // ⚽ CAPTURAR PALPITES APENAS NOS COMENTÁRIOS DO BOLÃO E REAGIR COM 👍
+        // ⚽ CAPTURA DE PALPITES NO CANAL/GRUPO (SALVA DIRETO NO D1)
         // ==========================================================
         else if (texto) {
             const regexPlacar = /\d+\s*(x|X|×|-|a)\s*\d+/i;
 
             if (regexPlacar.test(texto)) {
-                let bolaoAberto = await env.GOLS_FLAMENGO_KV.get("bolao_aberto");
+                let bolaoAberto = await getConfig(env.DB, "bolao_aberto");
 
                 if (bolaoAberto === "true") {
-                    let postId = await env.GOLS_FLAMENGO_KV.get("postagem_ativa_id");
+                    let postId = await getConfig(env.DB, "postagem_ativa_id");
 
                     if (postId) {
                         const replyTo = mensagem.reply_to_message;
@@ -775,10 +713,10 @@ export async function processarMensagemTelegram(request, env, botTokenPassado) {
                         );
 
                         if (eComentarioDoBolao) {
-                            await env.GOLS_FLAMENGO_KV.put(
-                                "palpite_user_" + postId + "_" + userId,
-                                JSON.stringify({ palpite: texto.trim(), nome: realName, hora: Date.now() })
-                            );
+                            await env.DB.prepare(`
+                                INSERT INTO palpites (postagem_id, user_id, palpite, criado_em)
+                                VALUES (?, ?, ?, ?)
+                            `).bind(postId, userId, texto.trim(), Date.now()).run();
 
                             try {
                                 await fetch(`https://api.telegram.org/bot${botToken}/setMessageReaction`, {
