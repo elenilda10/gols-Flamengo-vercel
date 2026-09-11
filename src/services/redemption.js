@@ -36,10 +36,57 @@ function parseVencedores(raw) {
 }
 
 function normalizarPlacar(valor) {
-  const texto = String(valor || "").trim();
-  const match = texto.match(/^(\d+)\s*[xX×:\-]\s*(\d+)$/);
-  if (!match) return null;
+  const texto = String(valor || "").trim().toLowerCase();
+  const match = texto.match(/(\d+)\s*(?:x|×|-|a|:)\s*(\d+)/i);
+  if (!match) return "";
   return `${Number(match[1])}x${Number(match[2])}`;
+}
+
+async function localizarPalpiteDoBolao(env, postagemId, userId, resultadoOficial, encerradoEm) {
+  const direto = await env.DB.prepare(
+    "SELECT postagem_id, palpite, criado_em FROM palpites WHERE postagem_id = ? AND user_id = ?"
+  ).bind(postagemId, userId).first();
+
+  if (direto) {
+    return { palpite: direto.palpite || "", recuperado: false, origemPostagemId: String(postagemId) };
+  }
+
+  const bolao = await env.DB.prepare(
+    "SELECT criado_em FROM boloes WHERE postagem_id = ?"
+  ).bind(postagemId).first();
+
+  const inicio = Number(bolao?.criado_em || 0);
+  const fim = Number(encerradoEm || 0);
+  const placarOficialNormalizado = normalizarPlacar(resultadoOficial);
+
+  if (!inicio || !fim || !placarOficialNormalizado) {
+    return { palpite: "", recuperado: false, origemPostagemId: null };
+  }
+
+  const margem = 5 * 60 * 1000;
+  const { results } = await env.DB.prepare(`
+    SELECT postagem_id, palpite, criado_em
+    FROM palpites
+    WHERE user_id = ?
+      AND CAST(criado_em AS INTEGER) >= ?
+      AND CAST(criado_em AS INTEGER) <= ?
+    ORDER BY CAST(criado_em AS INTEGER) DESC
+    LIMIT 20
+  `).bind(userId, inicio - margem, fim + margem).all();
+
+  const candidatos = (results || []).filter(
+    (p) => normalizarPlacar(p.palpite) === placarOficialNormalizado
+  );
+
+  if (candidatos.length !== 1) {
+    return { palpite: "", recuperado: false, origemPostagemId: null };
+  }
+
+  return {
+    palpite: candidatos[0].palpite || "",
+    recuperado: true,
+    origemPostagemId: String(candidatos[0].postagem_id || "")
+  };
 }
 
 export function extrairPostagemIdResgate(texto) {
@@ -76,11 +123,8 @@ export async function processarResgatePontos(update, env) {
   const encerradoEm = Number(await getConfig(env.DB, `bolao_encerrado_em_${postagemId}`)) || 0;
   const aindaEmRevisao = encerradoEm > 0 && Date.now() - encerradoEm < 60 * 60 * 1000;
 
-  const palpiteRow = await env.DB.prepare(
-    "SELECT palpite FROM palpites WHERE postagem_id = ? AND user_id = ?"
-  ).bind(postagemId, userId).first();
-
-  const palpite = palpiteRow?.palpite || "";
+  const palpiteInfo = await localizarPalpiteDoBolao(env, postagemId, userId, resultadoOficial, encerradoEm);
+  const palpite = palpiteInfo.palpite || "";
   const textoPalpite = palpite ? `\n📌 Seu palpite: <b>${escHTML(palpite)}</b>` : "";
 
   const acertoExistente = await env.DB.prepare(
@@ -92,29 +136,41 @@ export async function processarResgatePontos(update, env) {
     await sendMessage(
       env,
       chatId,
-      `✅ ${mention}, este ponto já foi resgatado.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}`
+      `✅ ${mention}, este ponto já foi contabilizado.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}`
     );
     return true;
   }
 
-  const vencedoresIds = parseVencedores(await getConfig(env.DB, `vencedores_ids_${postagemId}`));
+  const winnersKey = `vencedores_ids_${postagemId}`;
+  const vencedoresIds = parseVencedores(await getConfig(env.DB, winnersKey));
+  const ganhouPorLista = vencedoresIds.includes(String(userId));
   const placarPalpite = normalizarPlacar(palpite);
   const placarOficial = normalizarPlacar(resultadoOficial);
-
-  // O D1 é a fonte da verdade do palpite. A lista de vencedores continua sendo aceita,
-  // mas um palpite que bate exatamente com o placar oficial também é reconhecido.
-  const ganhouPorLista = vencedoresIds.includes(String(userId));
   const ganhouPorPlacar = Boolean(placarPalpite && placarOficial && placarPalpite === placarOficial);
   const ganhou = ganhouPorLista || ganhouPorPlacar;
 
+  if (ganhouPorPlacar && !ganhouPorLista) {
+    vencedoresIds.push(String(userId));
+    await setConfig(env.DB, winnersKey, JSON.stringify([...new Set(vencedoresIds)]));
+  }
+
   if (!ganhou) {
     await setConfig(env.DB, `resgate_verificado_${postagemId}_${userId}`, "true");
-    const revisao = aindaEmRevisao ? "\n\n🕒 O resultado ainda está no período de revisão de 1 hora." : "";
 
+    if (!palpite) {
+      await sendMessage(
+        env,
+        chatId,
+        `⚠️ ${mention}, não consegui localizar seu palpite vinculado a este bolão.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}\n\nSeu ponto <b>não foi descartado</b>. O sistema não vai marcar você como perdedor sem encontrar o palpite. Entre em contato com o suporte para conferência do registro.`
+      );
+      return true;
+    }
+
+    const revisao = aindaEmRevisao ? "\n\n🕒 O resultado ainda está no período de revisão de 1 hora." : "";
     await sendMessage(
       env,
       chatId,
-      `😔 ${mention}, você não faturou este bolão.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n❌ Status: <b>Você perdeu.</b>${revisao}`
+      `😔 ${mention}, seu palpite não corresponde ao resultado oficial.\n\n🏟 <b>Bolão:</b> ${escHTML(confronto)}\n⚽ <b>Resultado:</b> ${escHTML(resultadoOficial)}${textoPalpite}\n\n❌ Status: <b>Palpite diferente do resultado.</b>${revisao}`
     );
     return true;
   }
@@ -151,11 +207,12 @@ export async function processarResgatePontos(update, env) {
   const userAtualizado = await env.DB.prepare("SELECT pontos FROM usuarios WHERE id = ?").bind(userId).first();
   const total = Number(userAtualizado?.pontos || 0);
   const jaVerificou = await getConfig(env.DB, `resgate_verificado_${postagemId}_${userId}`);
-  const textoExtra = jaVerificou === "true"
-    ? "\n🛠 Seu acerto foi reconhecido após a conferência manual."
-    : ganhouPorPlacar && !ganhouPorLista
-      ? "\n🛠 Seu acerto foi reconhecido diretamente pelo placar salvo no D1."
-      : "";
+
+  const observacoes = [];
+  if (jaVerificou === "true") observacoes.push("🛠 Seu acerto foi reconhecido após nova conferência.");
+  if (palpiteInfo.recuperado) observacoes.push("🔧 O vínculo do seu palpite foi recuperado automaticamente.");
+  if (ganhouPorPlacar && !ganhouPorLista) observacoes.push("✅ O placar salvo no D1 confirmou seu acerto.");
+  const textoExtra = observacoes.length ? `\n${observacoes.join("\n")}` : "";
 
   await sendMessage(
     env,
