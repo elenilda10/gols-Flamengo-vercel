@@ -1,20 +1,20 @@
 import { processarRotaApi } from './api_painel.js';
-import { processarMensagemTelegram } from './telegram_bot.js';
+import { processarWebhookTelegram } from './src/telegram.js';
 
 export default {
     async fetch(request, env) {
         const url = new URL(request.url);
 
-        // Se a requisição vier do Telegram (Mensagens ou Inline Queries)
+        // Webhook do Telegram: roteia mensagens, callbacks e inline queries por handlers dedicados.
         if (url.pathname === "/webhook" && request.method === "POST") {
-            return await processarMensagemTelegram(request, env);
+            return await processarWebhookTelegram(request, env);
         }
 
-        // Se a requisição vier do seu Painel Web (Importação do acervo)
+        // Painel Web / APIs.
         if (url.pathname.startsWith("/api")) {
             return await processarRotaApi(request, env);
         }
 
         return new Response("Bot do Flamengo Ativo na Cloudflare via GitHub!", { status: 200 });
-    } 
+    }
 };
