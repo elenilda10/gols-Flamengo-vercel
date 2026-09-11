@@ -35,6 +35,13 @@ function parseVencedores(raw) {
   }
 }
 
+function normalizarPlacar(valor) {
+  const texto = String(valor || "").trim();
+  const match = texto.match(/^(\d+)\s*[xX×:\-]\s*(\d+)$/);
+  if (!match) return null;
+  return `${Number(match[1])}x${Number(match[2])}`;
+}
+
 export function extrairPostagemIdResgate(texto) {
   const match = String(texto || "").trim().match(/^\/start(?:@[A-Za-z0-9_]+)?\s+resgatar_([A-Za-z0-9_-]{1,100})$/i);
   return match?.[1] || null;
@@ -76,7 +83,6 @@ export async function processarResgatePontos(update, env) {
   const palpite = palpiteRow?.palpite || "";
   const textoPalpite = palpite ? `\n📌 Seu palpite: <b>${escHTML(palpite)}</b>` : "";
 
-  // A tabela de acertos passa a ser a fonte principal para impedir resgate duplicado.
   const acertoExistente = await env.DB.prepare(
     "SELECT resgatado FROM acertos WHERE postagem_id = ? AND user_id = ?"
   ).bind(postagemId, userId).first();
@@ -92,7 +98,14 @@ export async function processarResgatePontos(update, env) {
   }
 
   const vencedoresIds = parseVencedores(await getConfig(env.DB, `vencedores_ids_${postagemId}`));
-  const ganhou = vencedoresIds.includes(String(userId));
+  const placarPalpite = normalizarPlacar(palpite);
+  const placarOficial = normalizarPlacar(resultadoOficial);
+
+  // O D1 é a fonte da verdade do palpite. A lista de vencedores continua sendo aceita,
+  // mas um palpite que bate exatamente com o placar oficial também é reconhecido.
+  const ganhouPorLista = vencedoresIds.includes(String(userId));
+  const ganhouPorPlacar = Boolean(placarPalpite && placarOficial && placarPalpite === placarOficial);
+  const ganhou = ganhouPorLista || ganhouPorPlacar;
 
   if (!ganhou) {
     await setConfig(env.DB, `resgate_verificado_${postagemId}_${userId}`, "true");
@@ -109,7 +122,6 @@ export async function processarResgatePontos(update, env) {
   const agora = Date.now();
   const placarFinal = palpite || resultadoOficial;
 
-  // Claim idempotente: somente a primeira tentativa muda resgatado para 1.
   const claim = await env.DB.prepare(`
     INSERT INTO acertos (postagem_id, user_id, confronto, placar, resgatado, resgatado_em)
     VALUES (?, ?, ?, ?, 1, ?)
@@ -141,7 +153,9 @@ export async function processarResgatePontos(update, env) {
   const jaVerificou = await getConfig(env.DB, `resgate_verificado_${postagemId}_${userId}`);
   const textoExtra = jaVerificou === "true"
     ? "\n🛠 Seu acerto foi reconhecido após a conferência manual."
-    : "";
+    : ganhouPorPlacar && !ganhouPorLista
+      ? "\n🛠 Seu acerto foi reconhecido diretamente pelo placar salvo no D1."
+      : "";
 
   await sendMessage(
     env,
