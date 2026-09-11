@@ -1,9 +1,15 @@
 import { telegramRequest } from "./telegram.js";
-import { normalizarPlacar } from "./redemption.js";
 
 async function getConfig(db, chave) {
   const row = await db.prepare("SELECT valor FROM config WHERE chave = ?").bind(chave).first();
   return row ? row.valor : null;
+}
+
+function normalizarPlacar(valor) {
+  const texto = String(valor || "").trim().toLowerCase();
+  const match = texto.match(/(\d+)\s*(?:x|×|-|a|:)\s*(\d+)/i);
+  if (!match) return "";
+  return `${Number(match[1])}x${Number(match[2])}`;
 }
 
 function limparNome(from) {
@@ -43,8 +49,6 @@ export async function processarPalpiteAutomatico(update, env) {
     ON CONFLICT(id) DO UPDATE SET nome = excluded.nome
   `).bind(userId, nome, agora).run();
 
-  // O primeiro palpite válido do usuário é o que vale.
-  // Mensagens posteriores não sobrescrevem o palpite original.
   const gravacao = await env.DB.prepare(`
     INSERT OR IGNORE INTO palpites
       (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
