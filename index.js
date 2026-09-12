@@ -1,6 +1,6 @@
 import { processarRotaApi } from './api_painel.js';
 import { processarWebhookTelegram } from './src/telegram.js';
-import { renderRankingPage } from './src/pages/ranking.js';
+import { renderRankingPage, renderRankingAvatar } from './src/pages/ranking.js';
 
 export default {
     async fetch(request, env) {
@@ -9,6 +9,11 @@ export default {
         // Webhook do Telegram: roteia mensagens, callbacks e inline queries por handlers dedicados.
         if (url.pathname === "/webhook" && request.method === "POST") {
             return await processarWebhookTelegram(request, env);
+        }
+
+        // Fotos do ranking: o Worker busca a imagem atual no Telegram sem expor o token do bot.
+        if (url.pathname.startsWith("/ranking/avatar/") && request.method === "GET") {
+            return await renderRankingAvatar(request, env);
         }
 
         // Ranking visual servido diretamente pelo Cloudflare Worker.
