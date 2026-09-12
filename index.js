@@ -1,6 +1,6 @@
 import { processarRotaApi } from './api_painel.js';
 import { processarWebhookTelegram } from './src/telegram.js';
-import { renderRankingPage, renderRankingAvatar } from './src/pages/ranking.js';
+import { renderRankingAvatar } from './src/pages/ranking.js';
 import { renderHomePage, renderUserPage, renderAdminPage, processarSiteApi } from './src/pages/site.js';
 
 export default {
@@ -11,7 +11,7 @@ export default {
             return await processarWebhookTelegram(request, env);
         }
 
-        if (url.pathname === "/" && request.method === "GET") {
+        if ((url.pathname === "/" || url.pathname === "/ranking" || url.pathname === "/ranking/") && request.method === "GET") {
             return await renderHomePage(request, env);
         }
 
@@ -25,10 +25,6 @@ export default {
 
         if (url.pathname.startsWith("/ranking/avatar/") && request.method === "GET") {
             return await renderRankingAvatar(request, env);
-        }
-
-        if ((url.pathname === "/ranking" || url.pathname === "/ranking/") && request.method === "GET") {
-            return await renderRankingPage(request, env);
         }
 
         if (url.pathname.startsWith("/api")) {
