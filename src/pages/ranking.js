@@ -12,45 +12,189 @@ function iniciais(nome) {
   return (partes.slice(0, 2).map(p => p[0]).join("") || "T").toUpperCase();
 }
 
-function avatarMarkup(usuario, classe = "") {
-  const nome = usuario?.nome || "Torcedor";
-  const fallback = `<span class="avatar-fallback ${classe}">${esc(iniciais(nome))}</span>`;
-  if (!usuario?.foto_url) return fallback;
-  return `<span class="avatar-wrap ${classe}"><img src="${esc(usuario.foto_url)}" alt="Foto de ${esc(nome)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><span class="avatar-fallback" style="display:none">${esc(iniciais(nome))}</span></span>`;
-}
-
 function formatarData(ts) {
   const n = Number(ts || 0);
   if (!n) return "Data não registrada";
-  try { return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(n)); }
-  catch { return "Data não registrada"; }
+  try {
+    return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(n));
+  } catch {
+    return "Data não registrada";
+  }
+}
+
+function avatar(usuario, classe = "") {
+  const nome = usuario?.nome || "Torcedor";
+  const fallback = esc(iniciais(nome));
+  return `<span class="avatar ${classe}">
+    <img src="/ranking/avatar/${encodeURIComponent(String(usuario.id))}" alt="Foto de ${esc(nome)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+    <span class="avatar-fallback" style="display:none">${fallback}</span>
+  </span>`;
 }
 
 function cardPodio(usuario, classe, medalha, posicao) {
   if (!usuario) return '<div class="pod placeholder"></div>';
-  return `<article class="pod ${classe}"><div class="pod-glow"></div><div class="pod-medal">${medalha}</div><div class="pod-place">${posicao}º lugar</div>${avatarMarkup(usuario, "pod-avatar")}<div class="pod-name">${esc(usuario.nome || "Torcedor")}</div><div class="pod-score"><strong>${Number(usuario.pontos || 0)}</strong><span>pontos</span></div><div class="pod-meta">${Number(usuario.acertos_salvos || 0)} acerto(s) registrados</div></article>`;
+  return `<article class="pod ${classe}">
+    <div class="medal">${medalha}</div>
+    <div class="place">${posicao}º lugar</div>
+    ${avatar(usuario, "pod-avatar")}
+    <strong class="pod-name">${esc(usuario.nome || "Torcedor")}</strong>
+    <div class="pod-points"><b>${Number(usuario.pontos || 0)}</b><span>pontos</span></div>
+  </article>`;
 }
 
-function historicoItens(acertos = []) {
-  if (!acertos.length) return '<div class="empty-history"><div class="empty-icon">⚽</div><strong>Nenhuma partida detalhada</strong><span>Os próximos acertos confirmados aparecerão aqui.</span></div>';
-  return acertos.map((a, i) => `<article class="match-card"><div class="match-check">✓</div><div class="match-main"><div class="match-head"><span>ACERTO ${String(i + 1).padStart(2, "0")}</span><time>${esc(formatarData(a.resgatado_em))}</time></div><h4>${esc(a.confronto || "Partida")}</h4><div class="score-chip"><span>Placar acertado</span><strong>${esc(a.placar || "Correto")}</strong></div></div></article>`).join("");
+function partidasMarkup(partidas = []) {
+  if (!partidas.length) {
+    return '<div class="empty-history">Nenhuma partida detalhada registrada para este usuário.</div>';
+  }
+
+  return partidas.map((p, i) => `<article class="match">
+    <div class="match-index">${String(i + 1).padStart(2, "0")}</div>
+    <div class="match-info">
+      <strong>${esc(p.confronto || "Partida")}</strong>
+      <span>${esc(formatarData(p.resgatado_em))}</span>
+    </div>
+    <div class="match-score"><span>Placar</span><b>${esc(p.placar || "—")}</b></div>
+  </article>`).join("");
+}
+
+export async function renderRankingAvatar(request, env) {
+  const url = new URL(request.url);
+  const match = url.pathname.match(/^\/ranking\/avatar\/(\d+)$/);
+  if (!match) return new Response("Not found", { status: 404 });
+
+  const userId = Number(match[1]);
+  const user = await env.DB.prepare("SELECT nome, foto_file_id FROM usuarios WHERE id = ?").bind(userId).first();
+  if (!user) return new Response("Not found", { status: 404 });
+
+  const token = env.TELEGRAM_TOKEN;
+  let fileId = user.foto_file_id || "";
+
+  try {
+    if (!fileId && token) {
+      const photosRes = await fetch(`https://api.telegram.org/bot${token}/getUserProfilePhotos?user_id=${userId}&limit=1`);
+      const photos = await photosRes.json();
+      if (photos?.ok && photos.result?.photos?.length) {
+        const sizes = photos.result.photos[0] || [];
+        fileId = sizes[sizes.length - 1]?.file_id || sizes[0]?.file_id || "";
+        if (fileId) {
+          await env.DB.prepare("UPDATE usuarios SET foto_file_id = ? WHERE id = ?").bind(fileId, userId).run();
+        }
+      }
+    }
+
+    if (fileId && token) {
+      const fileRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`);
+      const fileData = await fileRes.json();
+      if (fileData?.ok && fileData.result?.file_path) {
+        const imageRes = await fetch(`https://api.telegram.org/file/bot${token}/${fileData.result.file_path}`);
+        if (imageRes.ok) {
+          const headers = new Headers();
+          headers.set("Content-Type", imageRes.headers.get("Content-Type") || "image/jpeg");
+          headers.set("Cache-Control", "public, max-age=1800");
+          headers.set("X-Content-Type-Options", "nosniff");
+          return new Response(imageRes.body, { status: 200, headers });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Erro ao carregar avatar do ranking", userId, error);
+  }
+
+  const texto = iniciais(user.nome || "Torcedor");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" rx="60" fill="#171b23"/><circle cx="60" cy="60" r="57" fill="none" stroke="#313846" stroke-width="3"/><text x="60" y="72" text-anchor="middle" font-family="Arial,sans-serif" font-size="38" font-weight="700" fill="#f8fafc">${esc(texto)}</text></svg>`;
+  return new Response(svg, {
+    status: 200,
+    headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "public, max-age=600" }
+  });
 }
 
 export async function renderRankingPage(request, env) {
   try {
-    const { results: ranking = [] } = await env.DB.prepare(`SELECT u.id,u.nome,u.pontos,u.foto_url,COUNT(a.id) AS acertos_salvos FROM usuarios u LEFT JOIN acertos a ON a.user_id=u.id WHERE u.pontos>0 GROUP BY u.id,u.nome,u.pontos,u.foto_url ORDER BY u.pontos DESC,u.nome COLLATE NOCASE ASC,u.id ASC`).all();
-    const { results: acertos = [] } = await env.DB.prepare(`SELECT a.user_id,a.confronto,a.placar,a.resgatado_em FROM acertos a INNER JOIN usuarios u ON u.id=a.user_id WHERE u.pontos>0 ORDER BY CAST(a.resgatado_em AS INTEGER) DESC,a.id DESC`).all();
+    const { results: ranking = [] } = await env.DB.prepare(`
+      SELECT u.id, u.nome, u.pontos
+      FROM usuarios u
+      WHERE u.pontos > 0
+      ORDER BY u.pontos DESC, u.nome COLLATE NOCASE ASC, u.id ASC
+    `).all();
+
+    const { results: acertos = [] } = await env.DB.prepare(`
+      SELECT a.user_id, a.postagem_id, a.confronto, a.placar, a.resgatado_em
+      FROM acertos a
+      INNER JOIN usuarios u ON u.id = a.user_id
+      WHERE u.pontos > 0
+      ORDER BY CAST(a.resgatado_em AS INTEGER) DESC, a.id DESC
+    `).all();
+
     const porUsuario = new Map();
-    for (const a of acertos) { const key=String(a.user_id); if(!porUsuario.has(key)) porUsuario.set(key,[]); porUsuario.get(key).push(a); }
-    const podium=cardPodio(ranking[1],"second","🥈",2)+cardPodio(ranking[0],"first","🥇",1)+cardPodio(ranking[2],"third","🥉",3);
-    const rankingRows=ranking.length?ranking.map((u,i)=>{const historico=porUsuario.get(String(u.id))||[];const topClass=i===0?"gold":i===1?"silver":i===2?"bronze":"";return `<article class="rank-card searchable" data-search="${esc(String(u.nome||"").toLowerCase())}"><div class="rank-main"><div class="rank-position ${topClass}">${i+1}</div>${avatarMarkup(u,"rank-avatar")}<div class="rank-user"><strong>${esc(u.nome||"Torcedor")}</strong><span>${Number(u.acertos_salvos||0)} acerto(s) no histórico</span></div><div class="rank-points"><strong>${Number(u.pontos||0)}</strong><span>PTS</span></div><button class="open-history" type="button" data-user="${u.id}">Ver acertos</button></div><div class="mobile-history" id="mobile-${u.id}"><div class="history-inner"><div class="history-title"><div><span>HISTÓRICO</span><h3>Partidas acertadas</h3></div><b>${historico.length}</b></div><div class="match-list">${historicoItens(historico)}</div></div></div></article>`;}).join(""):'<div class="empty-state">Ainda não há pontuações no ranking.</div>';
-    const historyCards=ranking.map((u,i)=>{const historico=porUsuario.get(String(u.id))||[];return `<section class="player-card searchable" data-search="${esc(String(u.nome||"").toLowerCase())}"><div class="player-head"><div class="player-ident">${avatarMarkup(u,"history-avatar")}<div><span>${i+1}º NO RANKING</span><h3>${esc(u.nome||"Torcedor")}</h3></div></div><div class="player-stats"><strong>${Number(u.pontos||0)}</strong><span>pontos</span><i>${historico.length} acertos</i></div></div><div class="match-list history-page-list">${historicoItens(historico)}</div></section>`;}).join("");
-    const totalTorcedores=ranking.length,totalPontos=ranking.reduce((s,u)=>s+Number(u.pontos||0),0),totalAcertos=ranking.reduce((s,u)=>s+Number(u.acertos_salvos||0),0),lider=ranking[0]?.nome||"—";
-    const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#08090c"><title>Ranking Oficial • Gols Flamengo</title><style>
-:root{--bg:#08090c;--surface:#101218;--surface2:#151922;--line:#242a36;--text:#f7f8fb;--muted:#9299a8;--muted2:#666e7e;--red:#ef233c;--gold:#f6c453;--silver:#c7ced8;--bronze:#c98751;--green:#39d17d;--shadow:0 24px 70px rgba(0,0,0,.42)}*{box-sizing:border-box}html{background:var(--bg);scroll-behavior:smooth}body{margin:0;min-height:100vh;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(1100px 540px at 50% -220px,rgba(239,35,60,.28),transparent 65%),linear-gradient(180deg,#0d090b 0,#090a0d 28%,#08090c 100%);-webkit-font-smoothing:antialiased}.page{width:min(100%,1080px);margin:0 auto;padding:0 18px 80px}.noise{position:fixed;inset:0;pointer-events:none;opacity:.045;background-image:radial-gradient(#fff .7px,transparent .7px);background-size:12px 12px;mask-image:linear-gradient(to bottom,#000,transparent 75%)}.topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;background:linear-gradient(180deg,rgba(8,9,12,.98),rgba(8,9,12,.9),rgba(8,9,12,0));backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:12px}.brand-mark{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(145deg,#f12742,#720814);box-shadow:0 12px 34px rgba(239,35,60,.24);border:1px solid rgba(255,255,255,.08);font-size:20px}.brand-copy strong{display:block;font-size:14px}.brand-copy span{display:block;color:var(--muted);font-size:10px;margin-top:2px;letter-spacing:.08em;text-transform:uppercase}.refresh{display:inline-flex;align-items:center;gap:7px;text-decoration:none;color:#fff;background:#141821;border:1px solid var(--line);border-radius:13px;padding:10px 13px;font-size:12px;font-weight:850}.hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:28px;align-items:end;padding:54px 0 34px}.kicker{display:inline-flex;align-items:center;gap:8px;color:#ffb4bd;font-size:11px;font-weight:950;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:12px 0 14px;font-size:clamp(42px,7vw,76px);line-height:.94;letter-spacing:-3.2px}.hero h1 em{font-style:normal;background:linear-gradient(90deg,#fff 10%,#fff 55%,#ff9ca8 100%);-webkit-background-clip:text;background-clip:text;color:transparent}.hero p{margin:0;max-width:650px;color:var(--muted);font-size:15px;line-height:1.75}.hero-aside{background:linear-gradient(180deg,rgba(23,27,36,.86),rgba(14,16,22,.9));border:1px solid var(--line);border-radius:24px;padding:20px;box-shadow:var(--shadow)}.live{display:flex;align-items:center;gap:9px;font-size:11px;font-weight:850;color:#cbd1db}.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 5px rgba(57,209,125,.1)}.leader-label{display:block;color:var(--muted);font-size:10px;margin-top:22px;text-transform:uppercase;letter-spacing:.13em}.leader-name{display:block;font-size:22px;font-weight:950;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.leader-note{display:block;color:var(--muted);font-size:11px;margin-top:4px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:34px}.stat{position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(20,23,31,.94),rgba(13,15,20,.94));border:1px solid var(--line);border-radius:20px;padding:18px 20px}.stat strong{display:block;font-size:29px}.stat span{display:block;color:var(--muted);font-size:10px;margin-top:4px;letter-spacing:.1em;text-transform:uppercase}.nav-tabs{position:sticky;top:72px;z-index:40;display:flex;gap:8px;padding:8px;margin:0 0 24px;background:rgba(12,14,18,.84);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:17px}.tab{flex:1;border:0;border-radius:12px;padding:12px 14px;background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:900}.tab.active{color:white;background:linear-gradient(180deg,#271217,#190d10);box-shadow:inset 0 0 0 1px #5a202a}.tab-panel{display:none}.tab-panel.active{display:block}.section-head{display:flex;align-items:end;justify-content:space-between;gap:14px;margin:0 0 14px}.section-head h2{margin:0;font-size:22px}.section-head span{color:var(--muted);font-size:11px}.podium{display:grid;grid-template-columns:1fr 1.12fr 1fr;align-items:end;gap:12px;margin-bottom:34px}.pod{position:relative;min-width:0;overflow:hidden;text-align:center;border-radius:26px;background:linear-gradient(180deg,#171b24,#0f1117);border:1px solid var(--line);padding:22px 13px 18px;box-shadow:var(--shadow)}.pod.first{min-height:282px;border-color:rgba(246,196,83,.5);background:linear-gradient(180deg,rgba(246,196,83,.11),#101218 49%)}.pod.second,.pod.third{min-height:244px}.pod.placeholder{visibility:hidden}.pod-medal{position:absolute;right:12px;top:10px;font-size:30px}.pod-place{color:var(--muted);font-size:9px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;margin-bottom:17px}.avatar-wrap,.avatar-fallback{display:grid;place-items:center;flex:0 0 auto;border-radius:50%;overflow:hidden;background:linear-gradient(145deg,#282e3b,#151820);font-weight:950}.avatar-wrap img{width:100%;height:100%;object-fit:cover}.avatar-wrap .avatar-fallback{width:100%;height:100%}.pod-avatar{width:82px;height:82px;margin:0 auto 13px;border:3px solid rgba(255,255,255,.14)}.first .pod-avatar{width:104px;height:104px;border-color:var(--gold)}.second .pod-avatar{border-color:var(--silver)}.third .pod-avatar{border-color:var(--bronze)}.pod-name{font-weight:950;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pod-score{margin-top:11px}.pod-score strong{font-size:34px}.pod-score span{display:block;color:var(--muted);font-size:9px}.pod-meta{margin-top:8px;color:var(--muted);font-size:10px}.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px}.search{flex:1;display:flex;align-items:center;gap:9px;background:#0f1218;border:1px solid var(--line);border-radius:14px;padding:0 13px}.search input{width:100%;height:44px;border:0;outline:0;background:transparent;color:#fff}.count-pill{padding:10px 12px;border-radius:12px;background:#171b23;border:1px solid var(--line);color:var(--muted);font-size:11px}.ranking-shell{background:rgba(13,15,20,.84);border:1px solid var(--line);border-radius:24px;padding:10px}.rank-card{background:linear-gradient(180deg,#11141a,#0e1015);border:1px solid #1c212b;border-radius:17px;margin:8px 0;overflow:hidden}.rank-main{display:grid;grid-template-columns:44px 54px minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:13px 14px}.rank-position{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:#171b23;color:#a6adba;font-weight:950}.rank-position.gold{background:linear-gradient(145deg,#f7d777,#dcae37);color:#241a03}.rank-position.silver{background:linear-gradient(145deg,#e6e9ef,#aeb6c2);color:#20242b}.rank-position.bronze{background:linear-gradient(145deg,#e3a16c,#a96437);color:#24150d}.rank-avatar{width:50px;height:50px;border:2px solid rgba(255,255,255,.11)}.rank-user strong{display:block;font-size:14px}.rank-user span{display:block;color:var(--muted);font-size:10px;margin-top:4px}.rank-points{text-align:right}.rank-points strong{display:block;font-size:22px}.rank-points span{display:block;color:var(--muted);font-size:8px}.open-history{border:1px solid #30252a;background:#1c1215;color:#ffb6bf;border-radius:11px;padding:9px 11px;font-size:10px;font-weight:900}.mobile-history{display:none;border-top:1px solid var(--line);background:#0c0e13}.mobile-history.open{display:block}.history-inner{padding:15px}.history-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.history-title h3{margin:3px 0 0;font-size:14px}.history-title span{color:#ff8e9b;font-size:8px}.history-page{display:grid;gap:14px}.player-card{background:linear-gradient(180deg,#11141a,#0d0f14);border:1px solid var(--line);border-radius:22px;padding:16px}.player-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:14px;border-bottom:1px solid #1e232c}.player-ident{display:flex;align-items:center;gap:12px}.history-avatar{width:52px;height:52px;border:2px solid rgba(255,255,255,.11)}.player-ident span{color:var(--muted);font-size:8px}.player-ident h3{margin:4px 0 0;font-size:15px}.player-stats{text-align:right}.player-stats strong{font-size:20px}.player-stats span,.player-stats i{display:block;font-size:8px;color:var(--muted)}.match-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.history-page-list{margin-top:14px}.match-card{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;padding:12px;background:#0c0f14;border:1px solid #1c222c;border-radius:14px}.match-check{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;background:rgba(57,209,125,.09);color:#65e593}.match-head{display:flex;justify-content:space-between;gap:8px}.match-head span{color:#ff8794;font-size:7px}.match-head time{color:var(--muted2);font-size:8px}.match-main h4{margin:6px 0 8px;font-size:11px}.score-chip{display:flex;justify-content:space-between;padding:7px 8px;border-radius:9px;background:#141820}.score-chip span{color:var(--muted);font-size:8px}.score-chip strong{font-size:11px}.empty-history,.empty-state,.no-results{text-align:center;padding:28px;color:var(--muted)}.empty-history strong,.empty-history span{display:block}.no-results{display:none}.no-results.show{display:block}.footer{text-align:center;color:#5f6674;font-size:10px;margin-top:26px}@media(max-width:760px){.page{padding:0 11px 50px}.hero{grid-template-columns:1fr;padding:32px 0 24px}.hero h1{font-size:44px}.hero-aside{display:none}.stats{gap:8px}.nav-tabs{top:66px}.podium{gap:7px}.pod{padding:18px 7px 14px}.pod.first{min-height:234px}.pod.second,.pod.third{min-height:210px}.pod-avatar{width:64px;height:64px}.first .pod-avatar{width:82px;height:82px}.rank-main{grid-template-columns:36px 46px minmax(0,1fr) auto;gap:9px;padding:11px 9px}.rank-avatar{width:42px;height:42px}.open-history{grid-column:3/5;width:100%}.match-list{grid-template-columns:1fr}.count-pill{display:none}}@media(max-width:460px){.hero h1{font-size:38px}.stats{grid-template-columns:1fr 1fr}.stat:last-child{grid-column:1/-1}.podium{gap:5px}.pod-avatar{width:56px;height:56px}.first .pod-avatar{width:72px;height:72px}.pod-name{font-size:12px}.tab{font-size:11px;padding:11px 8px}}
-</style></head><body><div class="noise"></div><main class="page"><header class="topbar"><div class="brand"><div class="brand-mark">🔴⚫</div><div class="brand-copy"><strong>Gols Flamengo</strong><span>Bolão oficial</span></div></div><a class="refresh" href="/ranking">↻ Atualizar</a></header><section class="hero"><div><div class="kicker">🏆 Ranking oficial da comunidade</div><h1><em>Quem mais cravou</em> o placar?</h1><p>Acompanhe a classificação do bolão, confira o pódio e abra o histórico de cada torcedor para ver exatamente quais partidas foram acertadas.</p></div><aside class="hero-aside"><div class="live"><span class="live-dot"></span> Dados atualizados diretamente do D1</div><span class="leader-label">Líder atual</span><strong class="leader-name">${esc(lider)}</strong><span class="leader-note">Classificação calculada pela pontuação oficial do bot.</span></aside></section><section class="stats"><div class="stat"><strong>${totalTorcedores}</strong><span>Torcedores pontuando</span></div><div class="stat"><strong>${totalPontos}</strong><span>Pontos distribuídos</span></div><div class="stat"><strong>${totalAcertos}</strong><span>Acertos registrados</span></div></section><nav class="nav-tabs"><button class="tab active" data-tab="ranking">🏆 Classificação</button><button class="tab" data-tab="history">⚽ Partidas acertadas</button></nav><section class="tab-panel active" id="panel-ranking"><div class="section-head"><h2>Pódio</h2><span>Top 3 da classificação</span></div><section class="podium">${podium}</section><div class="section-head"><h2>Classificação geral</h2><span>Toque em “Ver acertos” para abrir o histórico</span></div><div class="toolbar"><label class="search"><span>⌕</span><input id="searchRanking" type="search" placeholder="Buscar torcedor..."></label><div class="count-pill">${totalTorcedores} participantes</div></div><section class="ranking-shell" id="rankingList">${rankingRows}</section><div class="no-results" id="rankingEmpty">Nenhum torcedor encontrado.</div></section><section class="tab-panel" id="panel-history"><div class="section-head"><h2>Partidas acertadas</h2><span>Histórico individual por torcedor</span></div><div class="toolbar"><label class="search"><span>⌕</span><input id="searchHistory" type="search" placeholder="Buscar no histórico..."></label><div class="count-pill">${totalAcertos} acertos salvos</div></div><div class="history-page" id="historyList">${historyCards}</div><div class="no-results" id="historyEmpty">Nenhum histórico encontrado.</div></section><div class="footer">Gols Flamengo • Cloudflare Worker + D1</div></main><script>
-const tabs=[...document.querySelectorAll('.tab')],panels={ranking:document.getElementById('panel-ranking'),history:document.getElementById('panel-history')};function setTab(name){tabs.forEach(t=>t.classList.toggle('active',t.dataset.tab===name));Object.entries(panels).forEach(([k,p])=>p.classList.toggle('active',k===name));}tabs.forEach(t=>t.addEventListener('click',()=>setTab(t.dataset.tab)));document.querySelectorAll('.open-history').forEach(btn=>btn.addEventListener('click',()=>{const target=document.getElementById('mobile-'+btn.dataset.user);const isOpen=target.classList.toggle('open');btn.textContent=isOpen?'Fechar histórico':'Ver acertos';}));function bindSearch(inputId,containerId,emptyId){const input=document.getElementById(inputId),container=document.getElementById(containerId),empty=document.getElementById(emptyId);if(!input||!container)return;input.addEventListener('input',()=>{const q=input.value.trim().toLowerCase();let visible=0;container.querySelectorAll('.searchable').forEach(el=>{const ok=!q||el.dataset.search.includes(q);el.style.display=ok?'':'none';if(ok)visible++;});empty.classList.toggle('show',visible===0);});}bindSearch('searchRanking','rankingList','rankingEmpty');bindSearch('searchHistory','historyList','historyEmpty');
+    for (const a of acertos) {
+      const key = String(a.user_id);
+      if (!porUsuario.has(key)) porUsuario.set(key, []);
+      porUsuario.get(key).push(a);
+    }
+
+    const podium =
+      cardPodio(ranking[1], "second", "🥈", 2) +
+      cardPodio(ranking[0], "first", "🥇", 1) +
+      cardPodio(ranking[2], "third", "🥉", 3);
+
+    const linhasPontuacao = ranking.length
+      ? ranking.map((u, i) => `<article class="score-row">
+          <div class="position ${i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : ""}">${i + 1}</div>
+          ${avatar(u, "list-avatar")}
+          <div class="user-name"><strong>${esc(u.nome || "Torcedor")}</strong></div>
+          <div class="points"><b>${Number(u.pontos || 0)}</b><span>pts</span></div>
+        </article>`).join("")
+      : '<div class="empty">Ainda não há pontuações no ranking.</div>';
+
+    const linhasAcertos = ranking.length
+      ? ranking.map((u, i) => {
+          const partidas = porUsuario.get(String(u.id)) || [];
+          return `<article class="history-card">
+            <div class="history-head">
+              <div class="history-user">
+                ${avatar(u, "history-avatar")}
+                <div><span>${i + 1}º NO RANKING</span><strong>${esc(u.nome || "Torcedor")}</strong><code>ID ${esc(String(u.id))}</code></div>
+              </div>
+              <div class="history-total"><b>${partidas.length}</b><span>acerto(s)</span></div>
+            </div>
+            <div class="history-list">${partidasMarkup(partidas)}</div>
+          </article>`;
+        }).join("")
+      : '<div class="empty">Nenhum histórico disponível.</div>';
+
+    const totalPontos = ranking.reduce((s, u) => s + Number(u.pontos || 0), 0);
+    const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#08090c">
+<title>Ranking Oficial • Gols Flamengo</title>
+<style>
+:root{--bg:#08090c;--surface:#101319;--surface2:#151922;--line:#252b36;--text:#f8f9fb;--muted:#9199a8;--red:#ef233c;--gold:#f6c453;--silver:#c7ced8;--bronze:#c98751;--shadow:0 22px 60px rgba(0,0,0,.38)}*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(900px 430px at 50% -160px,rgba(239,35,60,.26),transparent 68%),linear-gradient(180deg,#0d090b,#08090c 34%);min-height:100vh}.page{width:min(100%,920px);margin:auto;padding:0 16px 64px}.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;padding:14px 0;background:linear-gradient(180deg,rgba(8,9,12,.98),rgba(8,9,12,.88),transparent);backdrop-filter:blur(16px)}.brand{display:flex;gap:11px;align-items:center}.brand-mark{width:44px;height:44px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(145deg,#f12742,#720814);font-size:20px}.brand strong{display:block;font-size:14px}.brand span{display:block;color:var(--muted);font-size:10px;margin-top:2px;text-transform:uppercase;letter-spacing:.08em}.refresh{color:#fff;text-decoration:none;background:#141821;border:1px solid var(--line);padding:10px 12px;border-radius:12px;font-size:12px;font-weight:800}.hero{padding:36px 0 24px}.hero .eyebrow{color:#ffadb7;font-size:11px;font-weight:900;letter-spacing:.15em}.hero h1{font-size:clamp(36px,7vw,62px);line-height:.97;letter-spacing:-2.5px;margin:10px 0 10px}.hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.65}.summary{display:flex;gap:10px;margin-top:18px}.summary div{background:#11151c;border:1px solid var(--line);border-radius:14px;padding:11px 13px}.summary b{font-size:18px}.summary span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;margin-top:2px}.tabs{position:sticky;top:70px;z-index:20;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:7px;background:rgba(12,14,19,.92);border:1px solid var(--line);border-radius:16px;backdrop-filter:blur(16px);margin-bottom:24px}.tab{border:0;background:transparent;color:var(--muted);padding:12px;border-radius:11px;font-weight:900;cursor:pointer}.tab.active{background:linear-gradient(180deg,#281318,#190d10);color:#fff;box-shadow:inset 0 0 0 1px #5a202a}.panel{display:none}.panel.active{display:block}.section-title{display:flex;justify-content:space-between;align-items:end;margin-bottom:13px}.section-title h2{margin:0;font-size:19px}.section-title span{color:var(--muted);font-size:11px}.podium{display:grid;grid-template-columns:1fr 1.08fr 1fr;align-items:end;gap:10px;margin-bottom:28px}.pod{position:relative;text-align:center;background:linear-gradient(180deg,#171b24,#0f1117);border:1px solid var(--line);border-radius:23px;padding:20px 9px 15px;min-width:0;box-shadow:var(--shadow)}.pod.first{min-height:240px;border-color:rgba(246,196,83,.48);background:linear-gradient(180deg,rgba(246,196,83,.1),#101218 48%)}.pod.second,.pod.third{min-height:210px}.pod.placeholder{visibility:hidden}.medal{position:absolute;top:8px;right:9px;font-size:27px}.place{font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:900;letter-spacing:.14em;margin-bottom:15px}.avatar{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:#1d222c;flex:0 0 auto}.avatar img,.avatar-fallback{width:100%;height:100%;object-fit:cover;place-items:center}.pod-avatar{width:76px;height:76px;margin:0 auto 12px;border:3px solid rgba(255,255,255,.15)}.first .pod-avatar{width:94px;height:94px;border-color:var(--gold)}.second .pod-avatar{border-color:var(--silver)}.third .pod-avatar{border-color:var(--bronze)}.pod-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}.pod-points{margin-top:10px}.pod-points b{font-size:29px}.pod-points span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase}.ranking-list{background:rgba(14,16,21,.84);border:1px solid var(--line);border-radius:22px;padding:8px}.score-row{display:grid;grid-template-columns:42px 50px minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px;border-bottom:1px solid #1c212b}.score-row:last-child{border-bottom:0}.position{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:#171b23;color:#a9b0bc;font-weight:950}.position.gold{background:linear-gradient(145deg,#f7d777,#dcae37);color:#241a03}.position.silver{background:linear-gradient(145deg,#e6e9ef,#aeb6c2);color:#20242b}.position.bronze{background:linear-gradient(145deg,#e3a16c,#a96437);color:#24150d}.list-avatar{width:46px;height:46px;border:2px solid rgba(255,255,255,.11)}.user-name{min-width:0}.user-name strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}.points{text-align:right}.points b{font-size:23px}.points span{display:block;color:var(--muted);font-size:9px}.history-grid{display:grid;gap:12px}.history-card{background:linear-gradient(180deg,#11141a,#0d1015);border:1px solid var(--line);border-radius:20px;overflow:hidden}.history-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 15px;border-bottom:1px solid #1d222b}.history-user{display:flex;align-items:center;gap:11px;min-width:0}.history-avatar{width:50px;height:50px;border:2px solid rgba(255,255,255,.12)}.history-user div{min-width:0}.history-user span{display:block;color:#ff98a4;font-size:8px;font-weight:900;letter-spacing:.12em}.history-user strong{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}.history-user code{display:block;color:var(--muted);font-size:9px;margin-top:3px}.history-total{text-align:right}.history-total b{display:block;font-size:20px}.history-total span{display:block;color:var(--muted);font-size:9px}.history-list{padding:10px;display:grid;gap:8px}.match{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;background:#0c0f14;border:1px solid #1c222b;border-radius:13px;padding:10px}.match-index{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:#191e27;color:#9ca5b5;font-size:9px;font-weight:900}.match-info{min-width:0}.match-info strong{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.match-info span{display:block;color:var(--muted);font-size:9px;margin-top:4px}.match-score{text-align:right}.match-score span{display:block;color:var(--muted);font-size:8px}.match-score b{display:block;margin-top:3px;font-size:14px}.empty,.empty-history{padding:28px 16px;text-align:center;color:var(--muted);font-size:12px}.footer{text-align:center;color:#626977;font-size:10px;margin-top:24px}@media(max-width:560px){.page{padding:0 10px 44px}.brand span{display:none}.hero{padding-top:28px}.summary{display:grid;grid-template-columns:1fr 1fr}.podium{gap:5px}.pod{padding-left:5px;padding-right:5px}.pod.first{min-height:218px}.pod.second,.pod.third{min-height:192px}.pod-avatar{width:60px;height:60px}.first .pod-avatar{width:76px;height:76px}.pod-name{font-size:12px}.score-row{grid-template-columns:34px 44px minmax(0,1fr) auto;padding:10px 8px}.list-avatar{width:40px;height:40px}.history-head{padding:12px 10px}.match{grid-template-columns:30px minmax(0,1fr) auto;padding:9px 8px}.history-user code{font-size:8px}}
+</style></head><body><main class="page">
+<header class="topbar"><div class="brand"><div class="brand-mark">🔴⚫</div><div><strong>Gols Flamengo</strong><span>Ranking oficial</span></div></div><a class="refresh" href="/ranking">↻ Atualizar</a></header>
+<section class="hero"><div class="eyebrow">🏆 BOLÃO GOLS FLAMENGO</div><h1>Ranking da Nação</h1><p>A primeira aba mostra somente a classificação e os pontos. Na segunda, você confere o histórico detalhado dos acertos.</p><div class="summary"><div><b>${ranking.length}</b><span>Torcedores</span></div><div><b>${totalPontos}</b><span>Pontos</span></div></div></section>
+<nav class="tabs"><button class="tab active" data-tab="ranking">Pontuação</button><button class="tab" data-tab="acertos">Acertos</button></nav>
+<section id="ranking" class="panel active"><div class="section-title"><h2>Pódio</h2><span>Top 3</span></div><div class="podium">${podium}</div><div class="section-title"><h2>Classificação geral</h2><span>Somente pontuação</span></div><div class="ranking-list">${linhasPontuacao}</div></section>
+<section id="acertos" class="panel"><div class="section-title"><h2>Acertos por usuário</h2><span>Foto • ID • partidas</span></div><div class="history-grid">${linhasAcertos}</div></section>
+<div class="footer">Gols Flamengo • Cloudflare Worker + D1</div>
+</main><script>
+const tabs=document.querySelectorAll('.tab');const panels=document.querySelectorAll('.panel');tabs.forEach(btn=>btn.addEventListener('click',()=>{tabs.forEach(x=>x.classList.remove('active'));panels.forEach(x=>x.classList.remove('active'));btn.classList.add('active');document.getElementById(btn.dataset.tab)?.classList.add('active');window.scrollTo({top:0,behavior:'smooth'});}));
 </script></body></html>`;
-    return new Response(html,{status:200,headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store, max-age=0","X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer","Content-Security-Policy":"default-src 'self'; img-src 'self' https: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"}});
-  } catch(error) { console.error("Erro ao renderizar ranking",error); return new Response("Não foi possível carregar o ranking agora.",{status:500,headers:{"Content-Type":"text/plain; charset=utf-8"}}); }
+
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store, max-age=0",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+      }
+    });
+  } catch (error) {
+    console.error("Erro ao renderizar ranking", error);
+    return new Response("Não foi possível carregar o ranking agora.", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
 }
