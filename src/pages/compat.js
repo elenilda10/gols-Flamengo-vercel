@@ -60,6 +60,42 @@ async function getRanking(env) {
   }));
 }
 
+async function proxyImage(imageUrl) {
+  try {
+    const res = await fetch(imageUrl, {
+      cache: "no-store",
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (!res.ok) return null;
+    const headers = new Headers();
+    headers.set("Content-Type", res.headers.get("Content-Type") || "image/jpeg");
+    headers.set("Content-Disposition", "inline");
+    headers.set("Cache-Control", "public, max-age=1800");
+    headers.set("X-Content-Type-Options", "nosniff");
+    return new Response(res.body, { status: 200, headers });
+  } catch {
+    return null;
+  }
+}
+
+async function telegramImageByFileId(fileId, env) {
+  const token = env.TELEGRAM_TOKEN || env.TELEGRAM_BOT_TOKEN;
+  if (!token || !fileId) return null;
+  try {
+    const getFile = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`, { cache: "no-store" });
+    if (!getFile.ok) return null;
+    const data = await getFile.json();
+    if (!data?.ok || !data.result?.file_path) return null;
+    return await proxyImage(`https://api.telegram.org/file/bot${token}/${data.result.file_path}`);
+  } catch {
+    return null;
+  }
+}
+
+function fallbackAvatar(name) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e50914"/><stop offset="1" stop-color="#111"/></linearGradient></defs><rect width="240" height="240" rx="120" fill="url(#g)"/><circle cx="120" cy="120" r="106" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="4"/><text x="120" y="138" text-anchor="middle" font-family="Arial,sans-serif" font-size="70" font-weight="900" fill="#fff">${esc(initials(name))}</text></svg>`;
+}
+
 function rankingSvg(ranking) {
   const top = ranking.slice(0, 10);
   const rows = top.map((item, index) => {
@@ -93,12 +129,7 @@ function rankingSvg(ranking) {
 }
 
 function faviconSvg() {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ef233c"/><stop offset="1" stop-color="#740814"/></linearGradient></defs>
-    <rect width="128" height="128" rx="30" fill="url(#g)"/>
-    <circle cx="45" cy="64" r="28" fill="#ff1744"/>
-    <circle cx="83" cy="64" r="28" fill="#20242b" stroke="#111" stroke-width="4"/>
-  </svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ef233c"/><stop offset="1" stop-color="#740814"/></linearGradient></defs><rect width="128" height="128" rx="30" fill="url(#g)"/><circle cx="45" cy="64" r="28" fill="#ff1744"/><circle cx="83" cy="64" r="28" fill="#20242b" stroke="#111" stroke-width="4"/></svg>`;
 }
 
 export function renderWorkerFavicon() {
@@ -119,19 +150,66 @@ export async function processarCompatApi(request, env) {
 
   if (url.pathname === "/api/avatar" && request.method === "GET") {
     const uid = url.searchParams.get("uid") || url.searchParams.get("id");
+    const fileId = url.searchParams.get("file_id") || "";
+    let name = cleanName(url.searchParams.get("name") || "Torcedor");
+
     if (uid && /^\d+$/.test(uid)) {
-      return Response.redirect(`${url.origin}/ranking/avatar/${uid}`, 302);
+      const user = await env.DB.prepare("SELECT nome, foto_url, foto_file_id FROM usuarios WHERE id = ? LIMIT 1").bind(Number(uid)).first();
+      if (user) {
+        name = cleanName(user.nome || name);
+        if (user.foto_url && /^https?:\/\//i.test(user.foto_url) && !user.foto_url.includes("dicebear")) {
+          const image = await proxyImage(user.foto_url);
+          if (image) return image;
+        }
+        if (user.foto_file_id) {
+          const image = await telegramImageByFileId(user.foto_file_id, env);
+          if (image) return image;
+        }
+      }
+
+      const token = env.TELEGRAM_TOKEN || env.TELEGRAM_BOT_TOKEN;
+      if (token) {
+        try {
+          const photosRes = await fetch(`https://api.telegram.org/bot${token}/getUserProfilePhotos?user_id=${uid}&limit=1`, { cache: "no-store" });
+          const photos = await photosRes.json();
+          const sizes = photos?.result?.photos?.[0] || [];
+          const newest = sizes[sizes.length - 1] || sizes[0];
+          if (photos?.ok && newest?.file_id) {
+            const image = await telegramImageByFileId(newest.file_id, env);
+            if (image) {
+              try { await env.DB.prepare("UPDATE usuarios SET foto_file_id = ? WHERE id = ?").bind(newest.file_id, Number(uid)).run(); } catch {}
+              return image;
+            }
+          }
+        } catch {}
+      }
     }
 
-    const fileId = url.searchParams.get("file_id");
     if (fileId) {
-      const user = await env.DB.prepare("SELECT id FROM usuarios WHERE foto_file_id = ? LIMIT 1").bind(fileId).first();
-      if (user?.id) return Response.redirect(`${url.origin}/ranking/avatar/${user.id}`, 302);
+      if (/^https?:\/\//i.test(fileId)) {
+        const image = await proxyImage(fileId);
+        if (image) return image;
+      }
+
+      const user = await env.DB.prepare("SELECT id, nome, foto_url FROM usuarios WHERE foto_file_id = ? LIMIT 1").bind(fileId).first();
+      if (user) {
+        name = cleanName(user.nome || name);
+        if (user.foto_url && /^https?:\/\//i.test(user.foto_url) && !user.foto_url.includes("dicebear")) {
+          const image = await proxyImage(user.foto_url);
+          if (image) return image;
+        }
+      }
+
+      const image = await telegramImageByFileId(fileId, env);
+      if (image) return image;
     }
 
-    const name = cleanName(url.searchParams.get("name") || "Torcedor");
-    const fallback = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e50914"/><stop offset="1" stop-color="#111"/></linearGradient></defs><rect width="240" height="240" rx="120" fill="url(#g)"/><text x="120" y="138" text-anchor="middle" font-family="Arial,sans-serif" font-size="70" font-weight="900" fill="#fff">${esc(initials(name))}</text></svg>`;
-    return new Response(fallback, { headers: { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "public, max-age=3600" } });
+    return new Response(fallbackAvatar(name), {
+      headers: {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
   }
 
   if (url.pathname === "/api/ranking-image" && request.method === "GET") {
