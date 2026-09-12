@@ -2,6 +2,7 @@ import { processarRotaApi } from './api_painel.js';
 import { processarWebhookTelegram } from './src/telegram.js';
 import { renderRankingAvatar } from './src/pages/ranking.js';
 import { renderHomePage, renderUserPage, renderAdminPage, processarSiteApi } from './src/pages/site.js';
+import { processarCompatApi, renderWorkerFavicon } from './src/pages/compat.js';
 
 export default {
     async fetch(request, env) {
@@ -9,6 +10,10 @@ export default {
 
         if (url.pathname === "/webhook" && request.method === "POST") {
             return await processarWebhookTelegram(request, env);
+        }
+
+        if ((url.pathname === "/favicon.svg" || url.pathname === "/favicon.ico" || url.pathname === "/favicon.png") && request.method === "GET") {
+            return renderWorkerFavicon();
         }
 
         if ((url.pathname === "/" || url.pathname === "/ranking" || url.pathname === "/ranking/") && request.method === "GET") {
@@ -28,8 +33,12 @@ export default {
         }
 
         if (url.pathname.startsWith("/api")) {
+            const compatResponse = await processarCompatApi(request, env);
+            if (compatResponse) return compatResponse;
+
             const siteResponse = await processarSiteApi(request, env);
             if (siteResponse) return siteResponse;
+
             return await processarRotaApi(request, env);
         }
 
