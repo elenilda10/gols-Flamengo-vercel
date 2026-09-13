@@ -1,13 +1,35 @@
 function token(env) {
-  if (!env?.TELEGRAM_TOKEN) throw new Error("TELEGRAM_TOKEN não configurado");
-  return env.TELEGRAM_TOKEN;
+  const value = env?.TELEGRAM_TOKEN || env?.TELEGRAM_BOT_TOKEN;
+  if (!value) throw new Error("TELEGRAM_TOKEN/TELEGRAM_BOT_TOKEN não configurado");
+  return value;
+}
+
+function normalizarPayload(method, payload = {}) {
+  const data = { ...payload };
+
+  // Bot API atual usa reply_parameters. Mantemos compatibilidade com o código legado.
+  if (data.reply_to_message_id != null && data.reply_parameters == null) {
+    data.reply_parameters = {
+      message_id: Number(data.reply_to_message_id),
+      allow_sending_without_reply: true
+    };
+    delete data.reply_to_message_id;
+  }
+
+  // disable_web_page_preview foi substituído por link_preview_options.
+  if (data.disable_web_page_preview != null && data.link_preview_options == null) {
+    data.link_preview_options = { is_disabled: Boolean(data.disable_web_page_preview) };
+    delete data.disable_web_page_preview;
+  }
+
+  return data;
 }
 
 export async function telegramRequest(env, method, payload = {}) {
   const response = await fetch(`https://api.telegram.org/bot${token(env)}/${method}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(normalizarPayload(method, payload))
   });
 
   let data;
@@ -19,7 +41,9 @@ export async function telegramRequest(env, method, payload = {}) {
 
   if (!response.ok || !data?.ok) {
     const descricao = data?.description || `HTTP ${response.status}`;
-    throw new Error(`Telegram ${method}: ${descricao}`);
+    const codigo = data?.error_code ? ` [${data.error_code}]` : "";
+    const parametros = data?.parameters ? ` ${JSON.stringify(data.parameters)}` : "";
+    throw new Error(`Telegram ${method}${codigo}: ${descricao}${parametros}`);
   }
 
   return data.result;
@@ -30,7 +54,7 @@ export function sendMessage(env, chatId, text, teclado = null, extras = {}) {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
-    disable_web_page_preview: true,
+    link_preview_options: { is_disabled: true },
     ...extras
   };
 
@@ -44,7 +68,7 @@ export async function editMessage(env, chatId, messageId, text, teclado = null, 
     message_id: messageId,
     text,
     parse_mode: "HTML",
-    disable_web_page_preview: true,
+    link_preview_options: { is_disabled: true },
     ...extras
   };
 
