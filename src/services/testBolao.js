@@ -61,17 +61,30 @@ async function iniciarTeste(update, env, texto) {
 
   const confronto = partes[0].trim();
   const foto = partes.slice(1).join("|").trim();
-  const destino = env?.TEST_BOLAO_CHAT_ID || message.chat.id;
+  const destino = String(env?.TEST_BOLAO_CHAT_ID || "").trim();
+
+  if (!destino) {
+    await sendMessage(
+      env,
+      message.chat.id,
+      "❌ <b>Canal de teste não configurado.</b>\n\n" +
+        "Crie no Worker a variável <code>TEST_BOLAO_CHAT_ID</code> com o ID ou @username do canal de testes.\n\n" +
+        "Exemplo: <code>@MeuCanalBolaoTeste</code>\n\n" +
+        "O bolão de teste não será publicado no privado para evitar misturar o fluxo de comentários."
+    );
+    return true;
+  }
 
   await garantirEstruturaBolaoTeste(env);
   await deleteTestConfig(env, "postagem_ativa_id");
   await setTestConfig(env, "bolao_aberto", "false");
   await setTestConfig(env, "confronto_atual", confronto);
+  await setTestConfig(env, "canal_destino", destino);
 
   const legenda =
     `🧪 <b>BOLÃO DE TESTE</b>\n\n` +
     `🏟 <b>Partida:</b> ${esc(confronto)}\n\n` +
-    `💬 Responda a esta postagem com um placar como <b>2x1</b>.\n` +
+    `💬 Envie seu palpite nos <b>comentários desta postagem</b> com um placar como <b>2x1</b>.\n` +
     `⚠️ Este ambiente é isolado e <b>não altera o ranking real</b>.`;
 
   let post;
@@ -93,9 +106,9 @@ async function iniciarTeste(update, env, texto) {
         message.chat.id,
         `❌ <b>Não foi possível iniciar o bolão de teste.</b>\n\n` +
           `🏟 <b>Confronto:</b> ${esc(confronto)}\n` +
-          `📍 <b>Destino:</b> <code>${esc(destino)}</code>\n` +
+          `📍 <b>Canal de teste:</b> <code>${esc(destino)}</code>\n` +
           `⚠️ <b>Erro:</b> <code>${esc(detalhe)}</code>\n\n` +
-          `Nenhum bolão de teste ficou aberto.`
+          `Verifique se o bot é administrador do canal e pode publicar mensagens.`
       );
     } catch (avisoError) {
       console.error("Falha ao avisar erro do bolão de teste", avisoError);
@@ -118,7 +131,16 @@ async function iniciarTeste(update, env, texto) {
   await setTestConfig(env, `confronto_${postId}`, confronto);
   await env.DB.prepare(`INSERT INTO test_boloes (postagem_id, confronto, criado_em) VALUES (?, ?, ?) ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto`).bind(postId, confronto, Date.now()).run();
 
-  await sendMessage(env, message.chat.id, `✅ <b>Bolão de teste iniciado.</b>\n📌 Post: <code>${postId}</code>\n🏟 <b>${esc(confronto)}</b>\n🧪 Nenhum dado de produção será alterado.`);
+  await sendMessage(
+    env,
+    message.chat.id,
+    `✅ <b>Bolão de teste publicado no canal.</b>\n` +
+      `📍 Canal: <code>${esc(destino)}</code>\n` +
+      `📌 Post: <code>${postId}</code>\n` +
+      `🏟 <b>${esc(confronto)}</b>\n\n` +
+      `💬 Os palpites devem chegar pelos comentários da postagem.\n` +
+      `🧪 Nenhum dado de produção será alterado.`
+  );
   return true;
 }
 
