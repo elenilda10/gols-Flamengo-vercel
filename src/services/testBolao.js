@@ -1,4 +1,4 @@
-import { answerCallbackQuery, sendMessage, telegramRequest } from "./telegram.js";
+import { sendMessage, telegramRequest } from "./telegram.js";
 
 const ADMIN_FALLBACK = "7717528550";
 
@@ -68,9 +68,7 @@ async function iniciarTeste(update, env, texto) {
       env,
       message.chat.id,
       "❌ <b>Canal de teste não configurado.</b>\n\n" +
-        "Crie no Worker a variável <code>TEST_BOLAO_CHAT_ID</code> com o ID ou @username do canal de testes.\n\n" +
-        "Exemplo: <code>@MeuCanalBolaoTeste</code>\n\n" +
-        "O bolão de teste não será publicado no privado para evitar misturar o fluxo de comentários."
+        "Crie no Worker a variável <code>TEST_BOLAO_CHAT_ID</code> com o ID ou @username do canal de testes."
     );
     return true;
   }
@@ -80,6 +78,44 @@ async function iniciarTeste(update, env, texto) {
   await setTestConfig(env, "bolao_aberto", "false");
   await setTestConfig(env, "confronto_atual", confronto);
   await setTestConfig(env, "canal_destino", destino);
+
+  let canalInfo;
+  try {
+    canalInfo = await telegramRequest(env, "getChat", { chat_id: destino });
+  } catch (error) {
+    await sendMessage(
+      env,
+      message.chat.id,
+      `❌ <b>Não consegui consultar o canal de teste.</b>\n\n<code>${esc(error?.message || error)}</code>`
+    );
+    return true;
+  }
+
+  if (canalInfo?.type !== "channel") {
+    await sendMessage(
+      env,
+      message.chat.id,
+      `❌ <b>TEST_BOLAO_CHAT_ID precisa apontar para um canal.</b>\nTipo recebido: <code>${esc(canalInfo?.type || "desconhecido")}</code>`
+    );
+    return true;
+  }
+
+  const grupoDiscussao = String(
+    canalInfo?.linked_chat_id || env?.TEST_BOLAO_DISCUSSION_ID || ""
+  ).trim();
+
+  if (!grupoDiscussao) {
+    await sendMessage(
+      env,
+      message.chat.id,
+      "❌ <b>O canal de teste não possui grupo de discussão vinculado.</b>\n\n" +
+        "Vincule um grupo ao canal para que os palpites cheguem pelos comentários."
+    );
+    return true;
+  }
+
+  await setTestConfig(env, "grupo_discussao_id", grupoDiscussao);
+  await setTestConfig(env, "canal_id", String(canalInfo.id));
 
   const legenda =
     `🧪 <b>BOLÃO DE TESTE</b>\n\n` +
@@ -99,22 +135,14 @@ async function iniciarTeste(update, env, texto) {
     await setTestConfig(env, "bolao_aberto", "false");
     await deleteTestConfig(env, "postagem_ativa_id");
 
-    const detalhe = String(error?.message || error || "Erro desconhecido");
-    try {
-      await sendMessage(
-        env,
-        message.chat.id,
-        `❌ <b>Não foi possível iniciar o bolão de teste.</b>\n\n` +
-          `🏟 <b>Confronto:</b> ${esc(confronto)}\n` +
-          `📍 <b>Canal de teste:</b> <code>${esc(destino)}</code>\n` +
-          `⚠️ <b>Erro:</b> <code>${esc(detalhe)}</code>\n\n` +
-          `Verifique se o bot é administrador do canal e pode publicar mensagens.`
-      );
-    } catch (avisoError) {
-      console.error("Falha ao avisar erro do bolão de teste", avisoError);
-    }
-
-    console.error("Erro ao publicar bolão de teste", { detalhe, destino, confronto });
+    await sendMessage(
+      env,
+      message.chat.id,
+      `❌ <b>Não foi possível iniciar o bolão de teste.</b>\n\n` +
+        `🏟 <b>Confronto:</b> ${esc(confronto)}\n` +
+        `📍 <b>Canal:</b> <code>${esc(destino)}</code>\n` +
+        `⚠️ <b>Erro:</b> <code>${esc(error?.message || error)}</code>`
+    );
     return true;
   }
 
@@ -129,16 +157,20 @@ async function iniciarTeste(update, env, texto) {
   await setTestConfig(env, "postagem_ativa_id", postId);
   await setTestConfig(env, "bolao_aberto", "true");
   await setTestConfig(env, `confronto_${postId}`, confronto);
-  await env.DB.prepare(`INSERT INTO test_boloes (postagem_id, confronto, criado_em) VALUES (?, ?, ?) ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto`).bind(postId, confronto, Date.now()).run();
+  await env.DB.prepare(`
+    INSERT INTO test_boloes (postagem_id, confronto, criado_em)
+    VALUES (?, ?, ?)
+    ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto
+  `).bind(postId, confronto, Date.now()).run();
 
   await sendMessage(
     env,
     message.chat.id,
     `✅ <b>Bolão de teste publicado no canal.</b>\n` +
       `📍 Canal: <code>${esc(destino)}</code>\n` +
+      `💬 Grupo de comentários: <code>${esc(grupoDiscussao)}</code>\n` +
       `📌 Post: <code>${postId}</code>\n` +
       `🏟 <b>${esc(confronto)}</b>\n\n` +
-      `💬 Os palpites devem chegar pelos comentários da postagem.\n` +
       `🧪 Nenhum dado de produção será alterado.`
   );
   return true;
@@ -184,7 +216,7 @@ async function ganhouTeste(update, env) {
     message.chat.id,
     `🧪 <b>CONFIRMAR VENCEDOR DO TESTE?</b>\n\n👤 ${esc(nome(reply.from))}\n📌 Palpite: <code>${placar}</code>\n\nNada será lançado no ranking real.`,
     teclado,
-    { reply_to_message_id: reply.message_id }
+    { reply_parameters: { message_id: reply.message_id, allow_sending_without_reply: true } }
   );
   return true;
 }
@@ -208,7 +240,9 @@ async function resgatarTeste(update, env, texto) {
   }
 
   const user = await env.DB.prepare("SELECT pontos FROM test_usuarios WHERE id = ?").bind(uid).first();
-  await sendMessage(env, message.chat.id,
+  await sendMessage(
+    env,
+    message.chat.id,
     `🧪 <b>RESGATE DE TESTE CONFIRMADO</b>\n\n🏟 ${esc(acerto.confronto || "Bolão de teste")}\n📌 Palpite: <code>${esc(acerto.placar || "-")}</code>\n📊 Pontos no ranking de teste: <b>${Number(user?.pontos || 0)}</b>\n\n✅ O ranking real não foi alterado.`
   );
   return true;
@@ -231,8 +265,10 @@ async function capturarPalpiteTeste(update, env, texto) {
   const postId = await getTestConfig(env, "postagem_ativa_id");
   if (!postId) return false;
 
-  const grupoTeste = String(env?.TEST_BOLAO_DISCUSSION_ID || "").trim();
-  if (grupoTeste && String(message.chat.id) !== grupoTeste) return false;
+  const grupoTeste = String(
+    (await getTestConfig(env, "grupo_discussao_id")) || env?.TEST_BOLAO_DISCUSSION_ID || ""
+  ).trim();
+  if (!grupoTeste || String(message.chat.id) !== grupoTeste) return false;
 
   await garantirEstruturaBolaoTeste(env);
 
@@ -268,7 +304,7 @@ async function capturarPalpiteTeste(update, env, texto) {
       message.chat.id,
       `⚠️ <b>TESTE:</b> seu palpite já estava salvo como <code>${esc(existente?.palpite || placar)}</code>.`,
       null,
-      { reply_to_message_id: message.message_id }
+      { reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true } }
     );
     return true;
   }
@@ -290,9 +326,11 @@ async function capturarPalpiteTeste(update, env, texto) {
     await sendMessage(
       env,
       message.chat.id,
-      `✅ <b>Palpite de teste salvo:</b> <code>${esc(placar)}</code>\n⚠️ Não consegui adicionar a reação 👍, mas o palpite foi registrado.`,
+      `✅ <b>Palpite de teste salvo:</b> <code>${esc(placar)}</code>\n` +
+        `⚠️ A reação 👍 não pôde ser aplicada.\n` +
+        `<code>${esc(error?.message || error)}</code>`,
       null,
-      { reply_to_message_id: message.message_id }
+      { reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true } }
     );
   }
 
