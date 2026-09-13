@@ -7,6 +7,8 @@ import { processarGolsApi } from './src/painel/goalsApi.js';
 import { processarGolsPages } from './src/painel/goalsPages.js';
 import { processarBolaoApi } from './src/painel/bolaoApi.js';
 import { processarBolaoPages } from './src/painel/bolaoPages.js';
+import { processarBolaoTestApi } from './src/painel/bolaoTestApi.js';
+import { processarBolaoTestPages } from './src/painel/bolaoTestPages.js';
 
 export default {
     async fetch(request, env) {
@@ -42,6 +44,12 @@ export default {
 
             const siteResponse = await processarSiteApi(request, env);
             if (siteResponse) return siteResponse;
+
+            const testPageResponse = await processarBolaoTestPages(request, env);
+            if (testPageResponse) return testPageResponse;
+
+            const testApiResponse = await processarBolaoTestApi(request, env);
+            if (testApiResponse) return testApiResponse;
 
             const goalsPageResponse = await processarGolsPages(request, env);
             if (goalsPageResponse) return goalsPageResponse;
