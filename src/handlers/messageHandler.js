@@ -3,6 +3,7 @@ import { processarResgatePontos } from "../services/redemption.js";
 import { processarPalpiteAutomatico } from "../services/bets.js";
 import { processarCorrecaoResgate } from "../services/redemptionAdmin.js";
 import { processarBolaoTeste } from "../services/testBolao.js";
+import { processarMenuPrincipal } from "../services/mainMenu.js";
 
 export async function handleMessage(update, env) {
     if (!update?.message) {
@@ -65,6 +66,16 @@ export async function handleMessage(update, env) {
         }
     } catch (error) {
         console.error("Erro no resgate de pontos", error);
+        return new Response("OK", { status: 200 });
+    }
+
+    try {
+        const processadoComoMenu = await processarMenuPrincipal(update, env);
+        if (processadoComoMenu) {
+            return new Response("OK", { status: 200 });
+        }
+    } catch (error) {
+        console.error("Erro ao abrir menu principal", error);
         return new Response("OK", { status: 200 });
     }
 
