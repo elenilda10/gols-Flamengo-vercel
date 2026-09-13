@@ -216,34 +216,63 @@ async function resgatarTeste(update, env, texto) {
 
 async function capturarPalpiteTeste(update, env, texto) {
   const message = update.message;
-  const placar = normalizarPlacarTeste(texto);
+  if (!message?.from || message.from.is_bot) return false;
+
+  const chatType = message.chat?.type;
+  if (chatType !== "group" && chatType !== "supergroup") return false;
+
+  const conteudo = String(texto || "").trim();
+  if (!conteudo || conteudo.startsWith("/")) return false;
+
+  const placar = normalizarPlacarTeste(conteudo);
   if (!placar) return false;
   if ((await getTestConfig(env, "bolao_aberto")) !== "true") return false;
 
   const postId = await getTestConfig(env, "postagem_ativa_id");
   if (!postId) return false;
 
-  const reply = message.reply_to_message;
-  const threadId = message.message_thread_id;
-  const relacionado = Boolean(
-    (reply && String(reply.message_id) === String(postId)) ||
-    (threadId && String(threadId) === String(postId)) ||
-    (reply && String(reply.forward_from_message_id || "") === String(postId)) ||
-    (reply?.forward_origin && String(reply.forward_origin.message_id || "") === String(postId))
-  );
-  if (!relacionado) return false;
+  const grupoTeste = String(env?.TEST_BOLAO_DISCUSSION_ID || "").trim();
+  if (grupoTeste && String(message.chat.id) !== grupoTeste) return false;
 
   await garantirEstruturaBolaoTeste(env);
-  const uid = Number(message.from?.id);
-  await env.DB.prepare(`INSERT INTO test_usuarios (id, nome, pontos, criado_em) VALUES (?, ?, 0, ?) ON CONFLICT(id) DO UPDATE SET nome = excluded.nome`).bind(uid, nome(message.from), Date.now()).run();
 
-  const existente = await env.DB.prepare("SELECT palpite FROM test_palpites WHERE postagem_id = ? AND user_id = ?").bind(postId, uid).first();
-  if (existente) {
-    await sendMessage(env, message.chat.id, `⚠️ <b>TESTE:</b> você já registrou <code>${esc(existente.palpite)}</code> neste bolão.`, null, { reply_to_message_id: message.message_id });
+  const uid = Number(message.from.id);
+  const agora = Date.now();
+  await env.DB.prepare(`
+    INSERT INTO test_usuarios (id, nome, pontos, criado_em)
+    VALUES (?, ?, 0, ?)
+    ON CONFLICT(id) DO UPDATE SET nome = excluded.nome
+  `).bind(uid, nome(message.from), agora).run();
+
+  const gravacao = await env.DB.prepare(`
+    INSERT OR IGNORE INTO test_palpites
+      (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em)
+    VALUES (?, ?, ?, ?, ?, 0, ?)
+  `).bind(
+    String(postId),
+    uid,
+    placar,
+    message.message_id,
+    String(message.chat.id),
+    agora
+  ).run();
+
+  const inseriu = Number(gravacao?.meta?.changes || 0) > 0;
+  if (!inseriu) {
+    const existente = await env.DB.prepare(
+      "SELECT palpite FROM test_palpites WHERE postagem_id = ? AND user_id = ?"
+    ).bind(postId, uid).first();
+
+    await sendMessage(
+      env,
+      message.chat.id,
+      `⚠️ <b>TESTE:</b> seu palpite já estava salvo como <code>${esc(existente?.palpite || placar)}</code>.`,
+      null,
+      { reply_to_message_id: message.message_id }
+    );
     return true;
   }
 
-  await env.DB.prepare(`INSERT INTO test_palpites (postagem_id, user_id, palpite, mensagem_id, chat_id, reagido, criado_em) VALUES (?, ?, ?, ?, ?, 1, ?)`).bind(postId, uid, placar, message.message_id, String(message.chat.id), Date.now()).run();
   try {
     await telegramRequest(env, "setMessageReaction", {
       chat_id: message.chat.id,
@@ -251,7 +280,22 @@ async function capturarPalpiteTeste(update, env, texto) {
       reaction: [{ type: "emoji", emoji: "👍" }],
       is_big: false
     });
-  } catch {}
+
+    await env.DB.prepare(
+      "UPDATE test_palpites SET reagido = 1 WHERE postagem_id = ? AND user_id = ?"
+    ).bind(postId, uid).run();
+  } catch (error) {
+    console.error("Falha ao reagir ao palpite do ambiente de teste", error);
+
+    await sendMessage(
+      env,
+      message.chat.id,
+      `✅ <b>Palpite de teste salvo:</b> <code>${esc(placar)}</code>\n⚠️ Não consegui adicionar a reação 👍, mas o palpite foi registrado.`,
+      null,
+      { reply_to_message_id: message.message_id }
+    );
+  }
+
   return true;
 }
 
