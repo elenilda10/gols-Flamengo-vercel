@@ -3,6 +3,17 @@ import { processarRankingApi } from "./src/painel/rankingApi.js";
 import { processarUsersApi } from "./src/painel/usersApi.js";
 
 export async function processarRotaApi(request, env) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE",
+        "Access-Control-Allow-Headers": "Content-Type"
+      }
+    });
+  }
+
   const migrationResponse = await processarMigrationApi(request, env);
   if (migrationResponse) return migrationResponse;
 
