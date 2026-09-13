@@ -54,7 +54,7 @@ async function iniciarTeste(update, env, texto) {
 
   const params = texto.replace(/^\/teste_iniciar_bolao(?:@[A-Za-z0-9_]+)?\s*/i, "").trim();
   const partes = params.split("|");
-  if (partes.length < 2) {
+  if (partes.length < 2 || !partes[0].trim() || !partes.slice(1).join("|").trim()) {
     await sendMessage(env, message.chat.id, "❌ Use: <code>/teste_iniciar_bolao Flamengo x Vasco 21h | FILE_ID_FOTO</code>");
     return true;
   }
@@ -65,7 +65,7 @@ async function iniciarTeste(update, env, texto) {
 
   await garantirEstruturaBolaoTeste(env);
   await deleteTestConfig(env, "postagem_ativa_id");
-  await setTestConfig(env, "bolao_aberto", "true");
+  await setTestConfig(env, "bolao_aberto", "false");
   await setTestConfig(env, "confronto_atual", confronto);
 
   const legenda =
@@ -74,19 +74,51 @@ async function iniciarTeste(update, env, texto) {
     `💬 Responda a esta postagem com um placar como <b>2x1</b>.\n` +
     `⚠️ Este ambiente é isolado e <b>não altera o ranking real</b>.`;
 
-  const post = await telegramRequest(env, "sendPhoto", {
-    chat_id: destino,
-    photo: foto,
-    caption: legenda,
-    parse_mode: "HTML"
-  });
+  let post;
+  try {
+    post = await telegramRequest(env, "sendPhoto", {
+      chat_id: destino,
+      photo: foto,
+      caption: legenda,
+      parse_mode: "HTML"
+    });
+  } catch (error) {
+    await setTestConfig(env, "bolao_aberto", "false");
+    await deleteTestConfig(env, "postagem_ativa_id");
+
+    const detalhe = String(error?.message || error || "Erro desconhecido");
+    try {
+      await sendMessage(
+        env,
+        message.chat.id,
+        `❌ <b>Não foi possível iniciar o bolão de teste.</b>\n\n` +
+          `🏟 <b>Confronto:</b> ${esc(confronto)}\n` +
+          `📍 <b>Destino:</b> <code>${esc(destino)}</code>\n` +
+          `⚠️ <b>Erro:</b> <code>${esc(detalhe)}</code>\n\n` +
+          `Nenhum bolão de teste ficou aberto.`
+      );
+    } catch (avisoError) {
+      console.error("Falha ao avisar erro do bolão de teste", avisoError);
+    }
+
+    console.error("Erro ao publicar bolão de teste", { detalhe, destino, confronto });
+    return true;
+  }
+
+  if (!post?.message_id) {
+    await setTestConfig(env, "bolao_aberto", "false");
+    await deleteTestConfig(env, "postagem_ativa_id");
+    await sendMessage(env, message.chat.id, "❌ O Telegram não retornou o ID da postagem de teste. Nenhum bolão foi aberto.");
+    return true;
+  }
 
   const postId = String(post.message_id);
   await setTestConfig(env, "postagem_ativa_id", postId);
+  await setTestConfig(env, "bolao_aberto", "true");
   await setTestConfig(env, `confronto_${postId}`, confronto);
   await env.DB.prepare(`INSERT INTO test_boloes (postagem_id, confronto, criado_em) VALUES (?, ?, ?) ON CONFLICT(postagem_id) DO UPDATE SET confronto = excluded.confronto`).bind(postId, confronto, Date.now()).run();
 
-  await sendMessage(env, message.chat.id, `✅ <b>Bolão de teste iniciado.</b>\n📌 Post: <code>${postId}</code>\n🧪 Nenhum dado de produção será alterado.`);
+  await sendMessage(env, message.chat.id, `✅ <b>Bolão de teste iniciado.</b>\n📌 Post: <code>${postId}</code>\n🏟 <b>${esc(confronto)}</b>\n🧪 Nenhum dado de produção será alterado.`);
   return true;
 }
 
