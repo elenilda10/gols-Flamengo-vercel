@@ -4,6 +4,9 @@ import { renderRankingAvatar } from './src/pages/ranking.js';
 import { renderHomePage, renderUserPage, renderAdminPage, processarSiteApi } from './src/pages/site.js';
 import { processarCompatApi, renderWorkerFavicon } from './src/pages/compat.js';
 import { processarGolsApi } from './src/painel/goalsApi.js';
+import { processarGolsPages } from './src/painel/goalsPages.js';
+import { processarBolaoApi } from './src/painel/bolaoApi.js';
+import { processarBolaoPages } from './src/painel/bolaoPages.js';
 
 export default {
     async fetch(request, env) {
@@ -40,8 +43,17 @@ export default {
             const siteResponse = await processarSiteApi(request, env);
             if (siteResponse) return siteResponse;
 
+            const goalsPageResponse = await processarGolsPages(request, env);
+            if (goalsPageResponse) return goalsPageResponse;
+
+            const bolaoPageResponse = await processarBolaoPages(request, env);
+            if (bolaoPageResponse) return bolaoPageResponse;
+
             const goalsResponse = await processarGolsApi(request, env);
             if (goalsResponse) return goalsResponse;
+
+            const bolaoResponse = await processarBolaoApi(request, env);
+            if (bolaoResponse) return bolaoResponse;
 
             return await processarRotaApi(request, env);
         }
