@@ -1,19 +1,5 @@
 import { answerInlineQuery } from "../services/telegram.js";
-
-function normalizarBusca(text) {
-  if (!text) return "";
-
-  let value = String(text).toLowerCase().trim();
-  try {
-    value = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  } catch {}
-
-  return value
-    .replace(/@flamengogolsbot/gi, "")
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { goalToInlineResult, normalizeGoalSearch, searchGoals } from "../services/goals.js";
 
 function textos(lang) {
   const base = {
@@ -96,7 +82,7 @@ export async function handleInlineQuery(update, env) {
     let lang = String(userDb?.idioma || inlineQuery.from?.language_code || "pt").slice(0, 2).toLowerCase();
     if (!["pt", "en", "es"].includes(lang)) lang = "pt";
 
-    const buscaNorm = normalizarBusca(inlineQuery.query || "");
+    const buscaNorm = normalizeGoalSearch(inlineQuery.query || "");
     const offset = Math.max(0, Number.parseInt(inlineQuery.offset || "0", 10) || 0);
     const t = textos(lang);
 
@@ -106,23 +92,8 @@ export async function handleInlineQuery(update, env) {
     }
 
     const limite = 50;
-    const termo = `%${buscaNorm}%`;
-    const { results = [] } = await env.DB.prepare(`
-      SELECT * FROM gols
-      WHERE jogo LIKE ? OR autor LIKE ? OR assistencia LIKE ? OR campeonato LIKE ? OR fase LIKE ?
-      ORDER BY CAST(criado_em AS INTEGER) DESC, CAST(id AS INTEGER) DESC
-      LIMIT ? OFFSET ?
-    `).bind(termo, termo, termo, termo, termo, limite, offset).all();
-
-    const resultados = results.map((gol) => ({
-      type: "video",
-      id: `vid_${gol.id}_${offset}`,
-      video_file_id: gol.file_id,
-      title: gol.jogo || "Gol",
-      description: `⚽️ ${gol.autor || "-"} | 🏆 ${gol.campeonato || "-"}`,
-      caption: `<b>${gol.jogo || ""}</b>\n\n⚽️ ${gol.autor || "-"}\n🅰 ${gol.assistencia || "-"}\n\n🏆 ${gol.campeonato || "-"} - ${gol.fase || "-"}\n\n🤖 @FlamengoGolsBot`,
-      parse_mode: "HTML"
-    }));
+    const gols = await searchGoals(env.DB, buscaNorm, { limit: limite, offset });
+    const resultados = gols.map((gol) => goalToInlineResult(gol, offset));
 
     const nextOffset = resultados.length === limite ? String(offset + limite) : "";
     await answerInlineQuery(env, inlineQuery.id, resultados, nextOffset);
