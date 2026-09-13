@@ -3,6 +3,7 @@ import { processarWebhookTelegram } from './src/telegram.js';
 import { renderRankingAvatar } from './src/pages/ranking.js';
 import { renderHomePage, renderUserPage, renderAdminPage, processarSiteApi } from './src/pages/site.js';
 import { processarCompatApi, renderWorkerFavicon } from './src/pages/compat.js';
+import { processarGolsApi } from './src/painel/goalsApi.js';
 
 export default {
     async fetch(request, env) {
@@ -38,6 +39,9 @@ export default {
 
             const siteResponse = await processarSiteApi(request, env);
             if (siteResponse) return siteResponse;
+
+            const goalsResponse = await processarGolsApi(request, env);
+            if (goalsResponse) return goalsResponse;
 
             return await processarRotaApi(request, env);
         }
