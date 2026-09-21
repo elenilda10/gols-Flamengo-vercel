@@ -48,7 +48,31 @@ export async function processarVpsApi(request, env) {
 
   // Private server-to-server API. Never expose CORS to browsers.
   if (request.method === "OPTIONS") return new Response(null, { status: 405 });
-  if (!authorized(request, env)) return json({ ok: false, error: "not_found" }, 404);
+  if (!authorized(request, env)) {
+    // Temporary safe diagnostics for health only. Never return secret/token values.
+    if (url.pathname === PREFIX + "/health" && request.method === "GET") {
+      const allowedIp = String(env.VPS_ALLOWED_IP || "").trim();
+      const configuredSecret = String(env.VPS_API_SECRET || "");
+      const auth = String(request.headers.get("Authorization") || "");
+      const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      return json({
+        ok: false,
+        error: "not_found",
+        diagnostic: {
+          ip_received: clientIp(request),
+          ip_configured: Boolean(allowedIp),
+          ip_match: Boolean(allowedIp) && clientIp(request) === allowedIp,
+          secret_configured: Boolean(configuredSecret),
+          authorization_received: Boolean(auth),
+          bearer_format: auth.startsWith("Bearer "),
+          token_length: bearer.length,
+          secret_length: configuredSecret.length,
+          token_match: Boolean(configuredSecret) && timingSafeEqual(bearer, configuredSecret)
+        }
+      }, 404);
+    }
+    return json({ ok: false, error: "not_found" }, 404);
+  }
 
   try {
     if (url.pathname === PREFIX + "/health" && request.method === "GET") {
