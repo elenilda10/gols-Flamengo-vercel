@@ -34,8 +34,12 @@ export async function getGoal(db, id) {
 }
 
 export async function saveGoal(db, payload) {
-  const editing = Boolean(payload?.id && String(payload.id).trim());
-  const id = editing ? String(payload.id).trim() : String(Date.now());
+  const requestedId = String(payload?.id || "").trim();
+  const id = requestedId || String(Date.now());
+  const existing = requestedId
+    ? await db.prepare("SELECT id FROM gols WHERE id = ?").bind(requestedId).first()
+    : null;
+  const editing = Boolean(existing);
   const fileId = String(payload?.file_id || "").trim();
   const jogo = String(payload?.jogo || "").trim();
   const autor = String(payload?.autor || "").trim();
