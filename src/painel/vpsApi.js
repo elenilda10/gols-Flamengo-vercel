@@ -112,6 +112,14 @@ export async function processarVpsApi(request, env) {
       const idiomaRaw = String(body?.idioma || "pt").slice(0, 2).toLowerCase();
       const idioma = ["pt", "en", "es"].includes(idiomaRaw) ? idiomaRaw : "pt";
 
+      const testCleanup = body?._test_cleanup === true;
+      if (testCleanup) {
+        // Reserved high-ID range only, so an API self-test can never touch a real Telegram user.
+        if (uid < 9000000000000000) return json({ ok: false, error: "invalid_test_uid" }, 400);
+        const existing = await env.DB.prepare("SELECT id FROM usuarios WHERE id = ?").bind(uid).first();
+        if (existing) return json({ ok: false, error: "test_uid_exists" }, 409);
+      }
+
       await env.DB.prepare(`
         INSERT INTO usuarios (id, nome, idioma, pontos, criado_em)
         VALUES (?, ?, ?, 0, ?)
@@ -119,6 +127,14 @@ export async function processarVpsApi(request, env) {
           nome = excluded.nome,
           idioma = excluded.idioma
       `).bind(uid, nome, idioma, Date.now()).run();
+
+      if (testCleanup) {
+        const created = await env.DB.prepare(
+          "SELECT id, nome, idioma, pontos, criado_em FROM usuarios WHERE id = ?"
+        ).bind(uid).first();
+        await env.DB.prepare("DELETE FROM usuarios WHERE id = ?").bind(uid).run();
+        return json({ ok: true, test_cleanup: true, user: created });
+      }
 
       return json({ ok: true });
     }
