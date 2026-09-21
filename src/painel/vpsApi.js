@@ -1,6 +1,7 @@
 import { getGoal, saveGoal, deleteGoal, searchGoals } from "../services/goals.js";
 
 const PREFIX = "/api/vps";
+const API_DIAGNOSTIC_VERSION = "vps-route-diag-20260921-1";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -61,7 +62,17 @@ export async function processarVpsApi(request, env) {
 
   try {
     if (url.pathname === PREFIX + "/health" && request.method === "GET") {
-      return json({ ok: true });
+      return json({ ok: true, version: API_DIAGNOSTIC_VERSION });
+    }
+
+    if (url.pathname === PREFIX + "/route-check" && request.method === "GET") {
+      return json({
+        ok: true,
+        version: API_DIAGNOSTIC_VERSION,
+        pathname: url.pathname,
+        method: request.method,
+        search_route_registered: true
+      });
     }
 
     if (url.pathname === PREFIX + "/gols/search" && request.method === "GET") {
