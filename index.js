@@ -9,6 +9,7 @@ import { processarBolaoApi } from './src/painel/bolaoApi.js';
 import { processarBolaoPages } from './src/painel/bolaoPages.js';
 import { processarBolaoTestApi } from './src/painel/bolaoTestApi.js';
 import { processarBolaoTestPages } from './src/painel/bolaoTestPages.js';
+import { processarVpsApi } from './src/painel/vpsApi.js';
 
 export default {
     async fetch(request, env) {
@@ -39,6 +40,9 @@ export default {
         }
 
         if (url.pathname.startsWith("/api")) {
+            const vpsResponse = await processarVpsApi(request, env);
+            if (vpsResponse) return vpsResponse;
+
             const compatResponse = await processarCompatApi(request, env);
             if (compatResponse) return compatResponse;
 
