@@ -73,6 +73,34 @@ export async function processarVpsApi(request, env) {
       return json({ ok: true, gols });
     }
 
+    // Read-only migration/export route for copying the complete goals table to the VPS.
+    // Pagination keeps responses small and the existing VPS IP + Bearer protection applies.
+    if (url.pathname === PREFIX + "/gols/migrate" && request.method === "GET") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+      const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+
+      const totalRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM gols").first();
+      const total = Number(totalRow?.total || 0);
+      const { results = [] } = await env.DB.prepare(`
+        SELECT *
+        FROM gols
+        ORDER BY CAST(criado_em AS INTEGER) ASC, CAST(id AS INTEGER) ASC
+        LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+
+      const nextOffset = offset + results.length;
+      return json({
+        ok: true,
+        total,
+        count: results.length,
+        offset,
+        limit,
+        has_more: nextOffset < total,
+        next_offset: nextOffset < total ? nextOffset : null,
+        gols: results
+      });
+    }
+
     if (url.pathname === PREFIX + "/gols/get" && request.method === "GET") {
       const id = String(url.searchParams.get("id") || "").trim();
       if (!id || id.length > 100) return json({ ok: false, error: "invalid_id" }, 400);
