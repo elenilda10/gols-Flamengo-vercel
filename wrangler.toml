@@ -10,5 +10,7 @@ database_id = "ebadcee9-18b3-4d13-97f0-edd4b142ed15"
 [vars]
 VPS_ALLOWED_IP = "194.163.179.203"
 
+
+VPS_ALLOWED_IPV6 = "2a02:c207:2359:2060::1"
 [observability]
 enabled = true
