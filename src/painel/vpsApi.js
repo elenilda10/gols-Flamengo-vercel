@@ -122,6 +122,34 @@ export async function processarVpsApi(request, env) {
       return json({ ok: true });
     }
 
+    // Read-only migration/export route for copying all Telegram users to the VPS.
+    // User IDs are kept as numeric values and pagination mirrors the goals migration route.
+    if (url.pathname === PREFIX + "/users/migrate" && request.method === "GET") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+      const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+
+      const totalRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM usuarios").first();
+      const total = Number(totalRow?.total || 0);
+      const { results = [] } = await env.DB.prepare(`
+        SELECT id, nome, idioma, pontos, foto_url, foto_file_id, criado_em
+        FROM usuarios
+        ORDER BY CAST(id AS INTEGER) ASC
+        LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+
+      const nextOffset = offset + results.length;
+      return json({
+        ok: true,
+        total,
+        count: results.length,
+        offset,
+        limit,
+        has_more: nextOffset < total,
+        next_offset: nextOffset < total ? nextOffset : null,
+        usuarios: results
+      });
+    }
+
     if (url.pathname === PREFIX + "/user/get" && request.method === "GET") {
       const uid = Number(url.searchParams.get("uid"));
       if (!Number.isSafeInteger(uid) || uid <= 0) return json({ ok: false, error: "invalid_uid" }, 400);
