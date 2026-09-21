@@ -150,6 +150,54 @@ export async function processarVpsApi(request, env) {
       });
     }
 
+    // Read-only exports for migrating the complete bolao state/history to the VPS.
+    if (url.pathname === PREFIX + "/config/migrate" && request.method === "GET") {
+      const { results = [] } = await env.DB.prepare("SELECT * FROM config ORDER BY chave ASC").all();
+      return json({ ok: true, total: results.length, config: results });
+    }
+
+    if (url.pathname === PREFIX + "/boloes/migrate" && request.method === "GET") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+      const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+      const totalRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM boloes").first();
+      const total = Number(totalRow?.total || 0);
+      const { results = [] } = await env.DB.prepare(`
+        SELECT * FROM boloes
+        ORDER BY CAST(criado_em AS INTEGER) ASC, CAST(postagem_id AS INTEGER) ASC
+        LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+      const nextOffset = offset + results.length;
+      return json({ ok: true, total, count: results.length, offset, limit, has_more: nextOffset < total, next_offset: nextOffset < total ? nextOffset : null, boloes: results });
+    }
+
+    if (url.pathname === PREFIX + "/palpites/migrate" && request.method === "GET") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+      const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+      const totalRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM palpites").first();
+      const total = Number(totalRow?.total || 0);
+      const { results = [] } = await env.DB.prepare(`
+        SELECT * FROM palpites
+        ORDER BY CAST(criado_em AS INTEGER) ASC, CAST(postagem_id AS INTEGER) ASC, CAST(user_id AS INTEGER) ASC
+        LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+      const nextOffset = offset + results.length;
+      return json({ ok: true, total, count: results.length, offset, limit, has_more: nextOffset < total, next_offset: nextOffset < total ? nextOffset : null, palpites: results });
+    }
+
+    if (url.pathname === PREFIX + "/acertos/migrate" && request.method === "GET") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+      const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+      const totalRow = await env.DB.prepare("SELECT COUNT(*) AS total FROM acertos").first();
+      const total = Number(totalRow?.total || 0);
+      const { results = [] } = await env.DB.prepare(`
+        SELECT * FROM acertos
+        ORDER BY CAST(resgatado_em AS INTEGER) ASC, CAST(postagem_id AS INTEGER) ASC, CAST(user_id AS INTEGER) ASC
+        LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+      const nextOffset = offset + results.length;
+      return json({ ok: true, total, count: results.length, offset, limit, has_more: nextOffset < total, next_offset: nextOffset < total ? nextOffset : null, acertos: results });
+    }
+
     if (url.pathname === PREFIX + "/user/get" && request.method === "GET") {
       const uid = Number(url.searchParams.get("uid"));
       if (!Number.isSafeInteger(uid) || uid <= 0) return json({ ok: false, error: "invalid_uid" }, 400);
