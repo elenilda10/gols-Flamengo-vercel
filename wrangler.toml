@@ -6,5 +6,10 @@ compatibility_date = "2026-09-22"
 DISCORD_APPLICATION_ID = "1551978996567253162"
 DISCORD_PUBLIC_KEY = "2a9d712e98297dc1766f3baba6b528737db738ac812173c3751e723136b6310f"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "flamengo-db"
+database_id = "ebadcee9-18b3-4d13-97f0-edd4b142ed15"
+
 [observability]
 enabled = true
