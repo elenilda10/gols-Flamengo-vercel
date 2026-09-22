@@ -116,6 +116,40 @@ async function statsMessage(env) {
   };
 }
 
+async function registerStart(interaction, env) {
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+  const guildId = interaction.guild_id;
+  const now = Date.now();
+
+  if (userId) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO discord_usuarios (user_id, iniciado_em) VALUES (?, ?)"
+    ).bind(String(userId), now).run();
+  }
+
+  if (guildId) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO discord_servidores (guild_id, registrado_em) VALUES (?, ?)"
+    ).bind(String(guildId), now).run();
+  }
+}
+
+async function statsMessage(env) {
+  const [users, guilds] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_usuarios").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_servidores").first(),
+  ]);
+
+  return {
+    content: [
+      "📊 **Estatísticas — Gols Flamengo**",
+      "",
+      `👥 Usuários que iniciaram: **${users?.total || 0}**`,
+      `🏠 Servidores registrados: **${guilds?.total || 0}**`,
+    ].join("\n"),
+  };
+}
+
 function helpMessage() {
   return {
     content: [
