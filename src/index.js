@@ -46,6 +46,16 @@ async function searchGoals(query, limit = 25) {
   return response.json();
 }
 
+const CHANNEL_BUTTON = {
+  type: 1,
+  components: [{
+    type: 2,
+    style: 5,
+    label: "📢 Canal do Flamengo",
+    url: "https://t.me/Flamengo77",
+  }],
+};
+
 function goalCaption(goal) {
   return [
     `**${goal.jogo}**`,
@@ -55,6 +65,39 @@ function goalCaption(goal) {
     "",
     `🏆 ${goal.campeonato || "-"} - ${goal.fase || "-"}`,
   ].join("\n");
+}
+
+function startMessage() {
+  return {
+    content: [
+      "🔴⚫ **Bem-vindo ao Gols Flamengo!**",
+      "",
+      "Aqui você pode buscar e assistir aos gols do Flamengo diretamente no Discord.",
+      "",
+      "🔎 Use **/gol** para pesquisar no nosso acervo.",
+      "❓ Se precisar de ajuda, use **/help**.",
+    ].join("\n"),
+    components: [CHANNEL_BUTTON],
+  };
+}
+
+function helpMessage() {
+  return {
+    content: [
+      "📖 **Como usar o Gols Flamengo**",
+      "",
+      "⚽ **/gol** — Pesquise um gol do nosso acervo.",
+      "",
+      "Você pode buscar por:",
+      "👤 Jogador — `Pedro`",
+      "🆚 Jogo/adversário — `Flamengo x Vasco`",
+      "🏆 Campeonato — `Libertadores`",
+      "📅 Fase/rodada — `28ª rodada`",
+      "",
+      "Conforme você digita, os resultados aparecem automaticamente. Escolha o gol desejado e o bot enviará o vídeo no canal.",
+    ].join("\n"),
+    components: [CHANNEL_BUTTON],
+  };
 }
 
 async function sendGoal(interaction, env, ctx) {
@@ -80,7 +123,7 @@ async function sendGoal(interaction, env, ctx) {
       const bytes = await source.arrayBuffer();
 
       const form = new FormData();
-      form.append("payload_json", JSON.stringify({ content: goalCaption(goal) }));
+      form.append("payload_json", JSON.stringify({ content: goalCaption(goal), components: [CHANNEL_BUTTON] }));
       form.append("files[0]", new Blob([bytes], { type: "video/mp4" }), `gol-${goalId}.mp4`);
 
       const sent = await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}`, {
@@ -119,8 +162,9 @@ async function handleAutocomplete(interaction) {
 
 async function registerCommands(env) {
   const commands = [
+    { name: "start", description: "Mensagem de boas-vindas do Gols Flamengo", type: 1 },
+    { name: "help", description: "Mostra como usar o bot e pesquisar gols", type: 1 },
     { name: "ping", description: "Verifica se o bot está online", type: 1 },
-    { name: "ajuda", description: "Mostra os comandos disponíveis", type: 1 },
     {
       name: "gol",
       description: "Busca e envia um gol do acervo do Flamengo",
@@ -158,11 +202,10 @@ async function handleInteraction(request, env, ctx) {
 
   if (interaction.type === 2) {
     const command = interaction.data?.name;
+    if (command === "start") return json({ type: 4, data: startMessage() });
+    if (command === "help") return json({ type: 4, data: helpMessage() });
     if (command === "ping") return json({ type: 4, data: { content: "🏓 Pong! Bot online no Cloudflare Workers." } });
     if (command === "gol") return sendGoal(interaction, env, ctx);
-    if (command === "ajuda") {
-      return json({ type: 4, data: { content: "🤖 Use **/gol** e digite jogador, adversário, campeonato ou fase para procurar no acervo.", flags: 64 } });
-    }
     return json({ type: 4, data: { content: "Comando ainda não implementado.", flags: 64 } });
   }
 
