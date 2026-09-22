@@ -86,41 +86,6 @@ async function registerStart(interaction, env) {
   const guildId = interaction.guild_id;
   const now = Date.now();
 
-  const statements = [];
-  if (userId) statements.push(env.DB.prepare(
-    "INSERT OR IGNORE INTO discord_usuarios (user_id, iniciado_em) VALUES (?, ?)"
-  ).bind(String(userId), now));
-  if (guildId) statements.push(env.DB.prepare(
-    "INSERT OR IGNORE INTO discord_servidores (guild_id, registrado_em) VALUES (?, ?)"
-  ).bind(String(guildId), now));
-
-  if (statements.length) await env.DB.batch(statements);
-}
-
-async function statsMessage(env) {
-  const [users, guilds] = await env.DB.batch([
-    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_usuarios"),
-    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_servidores"),
-  ]);
-
-  const userCount = users.results?.[0]?.total ?? 0;
-  const guildCount = guilds.results?.[0]?.total ?? 0;
-
-  return {
-    content: [
-      "📊 **Estatísticas — Gols Flamengo**",
-      "",
-      `👥 Usuários que iniciaram: **${userCount}**`,
-      `🏠 Servidores registrados: **${guildCount}**`,
-    ].join("\n"),
-  };
-}
-
-async function registerStart(interaction, env) {
-  const userId = interaction.member?.user?.id || interaction.user?.id;
-  const guildId = interaction.guild_id;
-  const now = Date.now();
-
   if (userId) {
     await env.DB.prepare(
       "INSERT OR IGNORE INTO discord_usuarios (user_id, iniciado_em) VALUES (?, ?)"
@@ -259,20 +224,6 @@ async function registerCommands(env) {
     : json({ ok: false, status: response.status, error: body }, 502);
 }
 
-async function listRegisteredCommands(env) {
-  const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
-    headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
-  });
-  const body = await response.text();
-  if (!response.ok) return json({ ok: false, status: response.status, error: body }, 502);
-  try {
-    const commands = JSON.parse(body);
-    return json({ ok: true, commands: commands.map((c) => ({ name: c.name, description: c.description, id: c.id })) });
-  } catch {
-    return json({ ok: false, error: "Invalid Discord response" }, 502);
-  }
-}
-
 async function handleInteraction(request, env, ctx) {
   const verified = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!verified.ok) return new Response("invalid request signature", { status: 401 });
@@ -315,22 +266,6 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx);
     if (request.method === "POST" && url.pathname === "/admin/register-commands") return registerCommands(env);
-    if (request.method === "GET" && url.pathname === "/admin/commands") {
-      const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
-        headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
-      });
-      const commands = await response.json();
-      if (!response.ok) return json({ ok: false, status: response.status }, 502);
-      return json({
-        ok: true,
-        commands: commands.map((command) => ({
-          name: command.name,
-          description: command.description,
-          id: command.id,
-        })),
-      });
-    }
-
     return new Response("Not Found", { status: 404 });
   },
 };
