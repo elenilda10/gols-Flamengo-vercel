@@ -189,6 +189,20 @@ async function registerCommands(env) {
     : json({ ok: false, status: response.status, error: body }, 502);
 }
 
+async function listRegisteredCommands(env) {
+  const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
+    headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+  });
+  const body = await response.text();
+  if (!response.ok) return json({ ok: false, status: response.status, error: body }, 502);
+  try {
+    const commands = JSON.parse(body);
+    return json({ ok: true, commands: commands.map((c) => ({ name: c.name, description: c.description, id: c.id })) });
+  } catch {
+    return json({ ok: false, error: "Invalid Discord response" }, 502);
+  }
+}
+
 async function handleInteraction(request, env, ctx) {
   const verified = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!verified.ok) return new Response("invalid request signature", { status: 401 });
