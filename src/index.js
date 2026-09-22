@@ -349,9 +349,63 @@ async function handleInteraction(request, env, ctx) {
   return json({ type: 4, data: { content: "Interação recebida.", flags: 64 } });
 }
 
+function legalPage(title, content) {
+  const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${title} — Gols Flamengo</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#0f1115;color:#f5f5f5;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65}
+    main{max-width:760px;margin:0 auto;padding:48px 22px 70px}.brand{font-weight:800;font-size:1.1rem;color:#ff3b3b;margin-bottom:28px}
+    h1{font-size:2rem;line-height:1.2;margin:0 0 8px}h2{font-size:1.15rem;margin-top:30px;color:#fff}
+    .updated{color:#9da3ae;margin-bottom:32px}.card{background:#171a21;border:1px solid #292e38;border-radius:16px;padding:24px}
+    p{margin:10px 0;color:#d7d9de}a{color:#ff5a5a}footer{margin-top:32px;color:#8d929c;font-size:.9rem}
+  </style>
+</head>
+<body><main><div class="brand">🔴⚫ Gols Flamengo</div><h1>${title}</h1><div class="updated">Última atualização: 23 de setembro de 2026</div><div class="card">${content}</div><footer>Gols Flamengo — aplicativo independente para consulta e reprodução de um acervo de gols no Discord.</footer></main></body>
+</html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=UTF-8", "cache-control": "public, max-age=3600" } });
+}
+
+function termsPage() {
+  return legalPage("Termos de Serviço", `
+    <h2>1. Sobre o serviço</h2>
+    <p>O Gols Flamengo é um aplicativo para Discord que permite pesquisar, navegar e reproduzir conteúdos do seu acervo de gols do Flamengo.</p>
+    <h2>2. Uso do aplicativo</h2>
+    <p>Ao utilizar o aplicativo, você concorda em usá-lo de forma legítima e de acordo com as regras do Discord. É proibido tentar explorar falhas, prejudicar o funcionamento do serviço, automatizar abusivamente requisições ou utilizar o aplicativo para atividades ilícitas.</p>
+    <h2>3. Disponibilidade</h2>
+    <p>O serviço é oferecido conforme disponível. Recursos, comandos e conteúdos podem ser alterados, suspensos ou removidos quando necessário, inclusive para manutenção ou adequações técnicas.</p>
+    <h2>4. Conteúdo e direitos</h2>
+    <p>Marcas, nomes, imagens, vídeos e demais conteúdos de terceiros permanecem sujeitos aos direitos de seus respectivos titulares. O Gols Flamengo não declara propriedade sobre marcas ou conteúdos pertencentes a terceiros.</p>
+    <h2>5. Relação com terceiros</h2>
+    <p>O Gols Flamengo é um projeto independente e não representa nem declara vínculo oficial com o Clube de Regatas do Flamengo ou com o Discord.</p>
+    <h2>6. Alterações destes termos</h2>
+    <p>Estes termos podem ser atualizados para refletir mudanças no aplicativo, em seus recursos ou em requisitos aplicáveis. A versão publicada nesta página será a versão vigente.</p>
+  `);
+}
+
+function privacyPage() {
+  return legalPage("Política de Privacidade", `
+    <h2>1. Dados utilizados</h2>
+    <p>Quando o comando /start é utilizado, o aplicativo pode registrar o identificador do usuário do Discord e, quando aplicável, o identificador do servidor. Esses identificadores são usados para contabilizar de forma única usuários e servidores nas estatísticas do serviço.</p>
+    <h2>2. Finalidade</h2>
+    <p>Os dados registrados são utilizados para funcionamento, manutenção, segurança e estatísticas do Gols Flamengo. O aplicativo não exige nome real, endereço, telefone ou dados de pagamento para utilizar seus comandos.</p>
+    <h2>3. Compartilhamento</h2>
+    <p>O Gols Flamengo não vende os identificadores registrados. O funcionamento do aplicativo depende de provedores de infraestrutura e do próprio Discord, que podem processar informações conforme suas próprias políticas.</p>
+    <h2>4. Retenção e segurança</h2>
+    <p>Os dados necessários às estatísticas podem ser mantidos enquanto o serviço estiver em operação. Medidas técnicas razoáveis são utilizadas para proteger a infraestrutura e limitar o acesso aos dados.</p>
+    <h2>5. Alterações</h2>
+    <p>Esta política pode ser atualizada quando houver mudanças no funcionamento do aplicativo ou no tratamento de dados. A versão publicada nesta página será a versão vigente.</p>
+  `);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/terms") return termsPage();
+    if (request.method === "GET" && url.pathname === "/privacy") return privacyPage();
     if (request.method === "GET" && url.pathname === "/") {
       return json({ ok: true, service: "discord-bot-worker", interactions: "/interactions" });
     }
