@@ -75,36 +75,6 @@ async function handleInteraction(request, env) {
   return json({ type: 4, data: { content: "Interação recebida.", flags: 64 } });
 }
 
-async function registerCommands(env) {
-  if (!env.DISCORD_APPLICATION_ID || !env.DISCORD_BOT_TOKEN) {
-    return json({ ok: false, error: "Discord credentials are not configured." }, 500);
-  }
-
-  const commands = [
-    { name: "ping", description: "Verifica se o bot está online", type: 1 },
-    { name: "ajuda", description: "Mostra os comandos disponíveis", type: 1 },
-  ];
-
-  const response = await fetch(
-    `https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(commands),
-    },
-  );
-
-  const body = await response.text();
-  if (!response.ok) {
-    return json({ ok: false, status: response.status, error: body }, 502);
-  }
-
-  return json({ ok: true, message: "Slash commands registered." });
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -115,11 +85,6 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/interactions") {
       return handleInteraction(request, env);
-    }
-
-    // Temporary bootstrap route. Remove immediately after the first successful registration.
-    if (request.method === "POST" && url.pathname === "/admin/register-commands") {
-      return registerCommands(env);
     }
 
     return new Response("Not Found", { status: 404 });
