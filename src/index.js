@@ -40,10 +40,51 @@ function optionValue(interaction, name) {
   return interaction.data?.options?.find((o) => o.name === name)?.value;
 }
 
-async function searchGoals(query, limit = 25) {
-  const response = await fetch(`${GOLS_API}/api/gols?q=${encodeURIComponent(query)}&limit=${limit}`);
+async function searchGoals(query, limit = 25, offset = 0) {
+  const response = await fetch(`${GOLS_API}/api/gols?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
   if (!response.ok) throw new Error(`Busca HTTP ${response.status}`);
   return response.json();
+}
+
+async function goalsPage(page = 0) {
+  const safePage = Math.max(Number(page) || 0, 0);
+  return searchGoals("", 25, safePage * 25);
+}
+
+function goalsCatalogMessage(data, page) {
+  const goals = data.results || [];
+  if (!goals.length) {
+    return { content: "⚽ Nenhum gol encontrado nesta página.", components: [] };
+  }
+
+  const options = goals.map((goal) => ({
+    label: `${goal.autor || "Gol"} — ${goal.jogo}`.slice(0, 100),
+    description: `${goal.campeonato || "-"} — ${goal.fase || "-"}`.slice(0, 100),
+    value: String(goal.id),
+  }));
+
+  const nav = [];
+  if (page > 0) nav.push({ type: 2, style: 2, label: "⬅️ Anterior", custom_id: `gols_page:${page - 1}` });
+  if (goals.length === 25) nav.push({ type: 2, style: 2, label: "Próxima ➡️", custom_id: `gols_page:${page + 1}` });
+
+  const components = [{
+    type: 1,
+    components: [{
+      type: 3,
+      custom_id: "gols_select",
+      placeholder: "Escolha um gol para assistir",
+      min_values: 1,
+      max_values: 1,
+      options,
+    }],
+  }];
+
+  if (nav.length) components.push({ type: 1, components: nav });
+
+  return {
+    content: `📚 **Acervo de Gols do Flamengo**\n\nPágina **${page + 1}** — escolha um gol abaixo:`,
+    components,
+  };
 }
 
 const CHANNEL_BUTTON = {
@@ -199,6 +240,7 @@ async function registerCommands(env) {
     { name: "start", description: "Mensagem de boas-vindas do Gols Flamengo", type: 1 },
     { name: "help", description: "Mostra como usar o bot e pesquisar gols", type: 1 },
     { name: "stats", description: "Mostra as estatísticas do Gols Flamengo", type: 1 },
+    { name: "gols", description: "Navegue pelo acervo completo de gols", type: 1 },
     { name: "ping", description: "Verifica se o bot está online", type: 1 },
     {
       name: "gol",
@@ -250,9 +292,39 @@ async function handleInteraction(request, env, ctx) {
         return json({ type: 4, data: { content: "❌ Não foi possível consultar as estatísticas agora.", flags: 64 } });
       }
     }
+    if (command === "gols") {
+      try {
+        const data = await goalsPage(0);
+        return json({ type: 4, data: goalsCatalogMessage(data, 0) });
+      } catch (error) {
+        console.error("Gols catalog:", error);
+        return json({ type: 4, data: { content: "❌ Não foi possível abrir o acervo agora.", flags: 64 } });
+      }
+    }
     if (command === "ping") return json({ type: 4, data: { content: "🏓 Pong! Bot online no Cloudflare Workers." } });
     if (command === "gol") return sendGoal(interaction, env, ctx);
     return json({ type: 4, data: { content: "Comando ainda não implementado.", flags: 64 } });
+  }
+
+  if (interaction.type === 3) {
+    const customId = interaction.data?.custom_id || "";
+
+    if (customId.startsWith("gols_page:")) {
+      const page = Math.max(Number(customId.split(":")[1]) || 0, 0);
+      try {
+        const data = await goalsPage(page);
+        return json({ type: 7, data: goalsCatalogMessage(data, page) });
+      } catch (error) {
+        console.error("Gols pagination:", error);
+        return json({ type: 4, data: { content: "❌ Não foi possível carregar esta página.", flags: 64 } });
+      }
+    }
+
+    if (customId === "gols_select") {
+      const goalId = String(interaction.data?.values?.[0] || "");
+      interaction.data = { name: "gol", options: [{ name: "busca", value: goalId }] };
+      return sendGoal(interaction, env, ctx);
+    }
   }
 
   return json({ type: 4, data: { content: "Interação recebida.", flags: 64 } });
