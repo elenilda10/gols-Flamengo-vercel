@@ -81,6 +81,41 @@ function startMessage() {
   };
 }
 
+async function registerStart(interaction, env) {
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+  const guildId = interaction.guild_id;
+  const now = Date.now();
+
+  const statements = [];
+  if (userId) statements.push(env.DB.prepare(
+    "INSERT OR IGNORE INTO discord_usuarios (user_id, iniciado_em) VALUES (?, ?)"
+  ).bind(String(userId), now));
+  if (guildId) statements.push(env.DB.prepare(
+    "INSERT OR IGNORE INTO discord_servidores (guild_id, registrado_em) VALUES (?, ?)"
+  ).bind(String(guildId), now));
+
+  if (statements.length) await env.DB.batch(statements);
+}
+
+async function statsMessage(env) {
+  const [users, guilds] = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_usuarios"),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_servidores"),
+  ]);
+
+  const userCount = users.results?.[0]?.total ?? 0;
+  const guildCount = guilds.results?.[0]?.total ?? 0;
+
+  return {
+    content: [
+      "📊 **Estatísticas — Gols Flamengo**",
+      "",
+      `👥 Usuários que iniciaram: **${userCount}**`,
+      `🏠 Servidores registrados: **${guildCount}**`,
+    ].join("\n"),
+  };
+}
+
 function helpMessage() {
   return {
     content: [
@@ -164,6 +199,7 @@ async function registerCommands(env) {
   const commands = [
     { name: "start", description: "Mensagem de boas-vindas do Gols Flamengo", type: 1 },
     { name: "help", description: "Mostra como usar o bot e pesquisar gols", type: 1 },
+    { name: "stats", description: "Mostra as estatísticas do Gols Flamengo", type: 1 },
     { name: "ping", description: "Verifica se o bot está online", type: 1 },
     {
       name: "gol",
@@ -216,8 +252,19 @@ async function handleInteraction(request, env, ctx) {
 
   if (interaction.type === 2) {
     const command = interaction.data?.name;
-    if (command === "start") return json({ type: 4, data: startMessage() });
+    if (command === "start") {
+      try { await registerStart(interaction, env); } catch (error) { console.error("D1 start stats:", error); }
+      return json({ type: 4, data: startMessage() });
+    }
     if (command === "help") return json({ type: 4, data: helpMessage() });
+    if (command === "stats") {
+      try {
+        return json({ type: 4, data: await statsMessage(env) });
+      } catch (error) {
+        console.error("D1 stats:", error);
+        return json({ type: 4, data: { content: "❌ Não foi possível consultar as estatísticas agora.", flags: 64 } });
+      }
+    }
     if (command === "ping") return json({ type: 4, data: { content: "🏓 Pong! Bot online no Cloudflare Workers." } });
     if (command === "gol") return sendGoal(interaction, env, ctx);
     return json({ type: 4, data: { content: "Comando ainda não implementado.", flags: 64 } });
@@ -247,17 +294,6 @@ export default {
           description: command.description,
           id: command.id,
         })),
-      });
-    }
-
-    if (request.method === "GET" && url.pathname === "/admin/commands") {
-      const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
-        headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
-      });
-      const body = await response.text();
-      return new Response(body, {
-        status: response.status,
-        headers: { "content-type": "application/json; charset=UTF-8" },
       });
     }
 
