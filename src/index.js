@@ -220,6 +220,18 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx);
     if (request.method === "POST" && url.pathname === "/admin/register-commands") return registerCommands(env);
+
+    if (request.method === "GET" && url.pathname === "/admin/commands") {
+      const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
+        headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+      });
+      const body = await response.text();
+      return new Response(body, {
+        status: response.status,
+        headers: { "content-type": "application/json; charset=UTF-8" },
+      });
+    }
+
     return new Response("Not Found", { status: 404 });
   },
 };
