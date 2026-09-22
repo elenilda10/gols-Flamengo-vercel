@@ -180,9 +180,9 @@ async function sendGoal(interaction, env, ctx) {
 async function handleAutocomplete(interaction) {
   const focused = interaction.data?.options?.find((o) => o.focused);
   const query = String(focused?.value || "").trim();
-  if (!query) return json({ type: 8, data: { choices: [] } });
-
   try {
+    // Campo vazio: mostra os gols mais recentes/disponíveis.
+    // Ao digitar, mantém a busca normal por jogador, jogo, campeonato ou fase.
     const data = await searchGoals(query, 25);
     const choices = (data.results || []).slice(0, 25).map((goal) => {
       const label = `${goal.autor || "Gol"} — ${goal.jogo} — ${goal.campeonato || ""}`;
