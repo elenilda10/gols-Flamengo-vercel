@@ -234,6 +234,21 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx);
     if (request.method === "POST" && url.pathname === "/admin/register-commands") return registerCommands(env);
+    if (request.method === "GET" && url.pathname === "/admin/commands") {
+      const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
+        headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+      });
+      const commands = await response.json();
+      if (!response.ok) return json({ ok: false, status: response.status }, 502);
+      return json({
+        ok: true,
+        commands: commands.map((command) => ({
+          name: command.name,
+          description: command.description,
+          id: command.id,
+        })),
+      });
+    }
 
     if (request.method === "GET" && url.pathname === "/admin/commands") {
       const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
