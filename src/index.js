@@ -256,11 +256,11 @@ async function handleAutocomplete(interaction) {
 
 async function registerCommands(env) {
   const commands = [
-    { name: "start", description: "Mensagem de boas-vindas do Gols Flamengo", type: 1 },
-    { name: "help", description: "Mostra como usar o bot e pesquisar gols", type: 1 },
-    { name: "stats", description: "Mostra as estatísticas do Gols Flamengo", type: 1 },
-    { name: "gols", description: "Navegue pelo acervo completo de gols", type: 1 },
-    { name: "ping", description: "Verifica se o bot está online", type: 1 },
+    { name: "start", description: "Mensagem de boas-vindas do Gols Flamengo", type: 1, integration_types: [0, 1], contexts: [0, 1, 2] },
+    { name: "help", description: "Mostra como usar o bot e pesquisar gols", type: 1, integration_types: [0, 1], contexts: [0, 1, 2] },
+    { name: "stats", description: "Mostra as estatísticas do Gols Flamengo", type: 1, integration_types: [0, 1], contexts: [0, 1, 2] },
+    { name: "gols", description: "Navegue pelo acervo completo de gols", type: 1, integration_types: [0, 1], contexts: [0, 1, 2] },
+    { name: "ping", description: "Verifica se o bot está online", type: 1, integration_types: [0, 1], contexts: [0, 1, 2] },
     {
       name: "gol",
       description: "Busca e envia um gol do acervo do Flamengo",
@@ -272,6 +272,8 @@ async function registerCommands(env) {
         required: true,
         autocomplete: true,
       }],
+      integration_types: [0, 1],
+      contexts: [0, 1, 2],
     },
   ];
   const response = await fetch(`https://discord.com/api/v10/applications/${env.DISCORD_APPLICATION_ID}/commands`, {
