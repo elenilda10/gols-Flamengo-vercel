@@ -122,6 +122,27 @@ function startMessage() {
   };
 }
 
+async function ensureUsageTable(env) {
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS discord_uso (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, install_type TEXT NOT NULL, command TEXT NOT NULL, usado_em INTEGER NOT NULL)"
+  ).run();
+}
+
+async function trackUsage(interaction, env, command) {
+  await ensureUsageTable(env);
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+  const guildId = interaction.guild_id;
+  await env.DB.prepare(
+    "INSERT INTO discord_uso (user_id, guild_id, install_type, command, usado_em) VALUES (?, ?, ?, ?, ?)"
+  ).bind(
+    userId ? String(userId) : null,
+    guildId ? String(guildId) : null,
+    guildId ? "guild" : "user",
+    String(command || "unknown"),
+    Date.now()
+  ).run();
+}
+
 async function registerStart(interaction, env) {
   const userId = interaction.member?.user?.id || interaction.user?.id;
   const guildId = interaction.guild_id;
@@ -141,9 +162,14 @@ async function registerStart(interaction, env) {
 }
 
 async function statsMessage(env) {
-  const [users, guilds] = await Promise.all([
+  await ensureUsageTable(env);
+  const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const [users, guilds, privateUsers, active7d, commands7d] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) AS total FROM discord_usuarios").first(),
     env.DB.prepare("SELECT COUNT(*) AS total FROM discord_servidores").first(),
+    env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS total FROM discord_uso WHERE install_type = 'user'").first(),
+    env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS total FROM discord_uso WHERE usado_em >= ?").bind(since7d).first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM discord_uso WHERE usado_em >= ?").bind(since7d).first(),
   ]);
 
   return {
@@ -151,9 +177,14 @@ async function statsMessage(env) {
       "📊 **Estatísticas — Gols Flamengo**",
       "",
       `👥 Usuários únicos que usaram **/start**: **${users?.total || 0}**`,
+      `👤 Usuários que usaram comandos no privado: **${privateUsers?.total || 0}**`,
       `🏠 Servidores únicos registrados via **/start**: **${guilds?.total || 0}**`,
       "",
-      "ℹ️ Estes números medem uso do **/start**. O Discord não informa ao bot, por este comando, quantas instalações vieram especificamente do **Descobrir**.",
+      "📈 **Últimos 7 dias**",
+      `🔥 Usuários ativos: **${active7d?.total || 0}**`,
+      `⚡ Comandos utilizados: **${commands7d?.total || 0}**`,
+      "",
+      "ℹ️ O Discord não informa ao bot quais instalações vieram especificamente do **Descobrir**; o crescimento após a ativação pode ser acompanhado por estes indicadores.",
     ].join("\n"),
   };
 }
@@ -302,6 +333,7 @@ async function handleInteraction(request, env, ctx) {
 
   if (interaction.type === 2) {
     const command = interaction.data?.name;
+    ctx.waitUntil(trackUsage(interaction, env, command).catch((error) => console.error("D1 usage stats:", error)));
     if (command === "start") {
       try { await registerStart(interaction, env); } catch (error) { console.error("D1 start stats:", error); }
       return json({ type: 4, data: startMessage() });
