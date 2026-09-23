@@ -412,7 +412,6 @@ export default {
       return json({ ok: true, service: "discord-bot-worker", interactions: "/interactions" });
     }
     if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx);
-    if (request.method === "POST" && url.pathname === "/admin/register-commands") return registerCommands(env);
     return new Response("Not Found", { status: 404 });
   },
 };
