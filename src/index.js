@@ -150,8 +150,10 @@ async function statsMessage(env) {
     content: [
       "📊 **Estatísticas — Gols Flamengo**",
       "",
-      `👥 Usuários que iniciaram: **${users?.total || 0}**`,
-      `🏠 Servidores registrados: **${guilds?.total || 0}**`,
+      `👥 Usuários únicos que usaram **/start**: **${users?.total || 0}**`,
+      `🏠 Servidores únicos registrados via **/start**: **${guilds?.total || 0}**`,
+      "",
+      "ℹ️ Estes números medem uso do **/start**. O Discord não informa ao bot, por este comando, quantas instalações vieram especificamente do **Descobrir**.",
     ].join("\n"),
   };
 }
